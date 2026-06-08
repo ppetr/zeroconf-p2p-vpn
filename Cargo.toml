@@ -6,5 +6,9 @@ publish = false
 license = "Apache 2.0"
 
 [dependencies]
-tokio-uring = "0.5"
+anyhow = "1.0"
+futures-util = "0.3.31"
 nix = { version = "0.29", features = ["fs", "net", "ioctl"] }
+rtnetlink = "0.21.0"
+tokio = { version = "1.36", features = ["full"] }
+tokio-uring = "0.5"
