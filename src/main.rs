@@ -2,6 +2,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use tracing::{info, level_filters::LevelFilter};
 use tracing_subscriber::fmt::format::FmtSpan;
 
+mod buffer_pool;
 mod osal;
 
 fn main() -> Result<(), anyhow::Error> {
@@ -31,22 +32,20 @@ fn main() -> Result<(), anyhow::Error> {
             tun.if_name
         );
 
-        let mut buf = vec![0u8; 2048];
-
+        let mut buffer_pool = buffer_pool::BufferPool::new(64, 2048);
         loop {
-            let (result, read_buf) = tun.file.read_at(buf, 0).await;
-            let n = result?;
-
-            if n == 0 {
-                buf = read_buf;
+            let mut buf = buffer_pool.pop().await;
+            buf.read_frame(&tun.file).await?;
+            if buf.buffer.is_empty() {
                 continue;
             }
+            let buf = buf.slice();
 
+            let n = (&buf).len();
             info!("Received raw packet of length: {} bytes!", n); // Byte 9 of an IPv4 header contains the Protocol (1 = ICMP / Ping)
             if n > 20 {
-                info!("Protocol Byte {}", read_buf[9]);
+                info!("Protocol Byte {}", (&buf)[9]);
             }
-            buf = read_buf;
             /*
             let (write_result, written_buf) = tun.file.write_at(read_buf.slice(..n), 0).submit().await;
             write_result?;
