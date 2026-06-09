@@ -1,14 +1,16 @@
-use anyhow::Error;
+use anyhow::{Context, Result};
 use futures_util::stream::TryStreamExt;
 use nix::libc;
 use rtnetlink::Handle;
 use std::ffi::CStr;
 use std::fs::OpenOptions;
+use std::net::IpAddr;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::fs::OpenOptionsExt;
 use tokio_uring::fs::File;
 
 use crate::osal::Globals;
+use crate::osal::ScopedRoute;
 
 // 1. Fixed: Use ioctl_write_ptr_bad! for commands passing a struct pointer.
 // This generates a type-safe function signature that accepts an *const libc::ifreq parameter.
@@ -22,15 +24,39 @@ pub struct Tun<'g> {
 }
 
 impl<'g> Tun<'g> {
-    pub async fn new(globals: &'g Globals, if_name: Option<&str>) -> Result<Tun<'g>, Error> {
+    pub async fn new(globals: &'g Globals, if_name: Option<&str>) -> Result<Tun<'g>> {
         let (file, if_name) = open_tun_uring(if_name)?;
-        let if_index = get_if_index(&globals.rtnetlink, if_name.clone()).await?;
-        Ok(Tun {
+        let if_index: u32 = get_if_index(&globals.rtnetlink, if_name.clone())
+            .await?
+            .expect("unable to determine the interface index");
+        let this = Tun {
             globals,
             file,
             if_name,
-            if_index: if_index.expect("Missing interface index"),
-        })
+            if_index: if_index,
+        };
+        this.link_up().await?;
+        Ok(this)
+    }
+
+    async fn link_up(&self) -> Result<()> {
+        self.globals
+            .rtnetlink
+            .link()
+            .set(
+                rtnetlink::LinkUnspec::new_with_index(self.if_index)
+                    .up()
+                    .build(),
+            )
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn add_route(self: &Self, ip: IpAddr) -> Result<ScopedRoute> {
+        ScopedRoute::new(self.globals, self.if_index, ip)
+            .await
+            .context("when registering route")
     }
 }
 
