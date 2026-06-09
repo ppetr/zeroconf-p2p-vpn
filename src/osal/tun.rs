@@ -10,6 +10,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use tokio_uring::fs::File;
 
 use crate::osal::Globals;
+use crate::osal::ScopedIfAddr;
 use crate::osal::ScopedRoute;
 
 // 1. Fixed: Use ioctl_write_ptr_bad! for commands passing a struct pointer.
@@ -51,6 +52,12 @@ impl<'g> Tun<'g> {
             .execute()
             .await?;
         Ok(())
+    }
+
+    pub async fn add_if_addr(self: &Self, ip: IpAddr) -> Result<ScopedIfAddr> {
+        ScopedIfAddr::new(self.globals, self.if_index, ip)
+            .await
+            .context("when registering interface address")
     }
 
     pub async fn add_route(self: &Self, ip: IpAddr) -> Result<ScopedRoute> {

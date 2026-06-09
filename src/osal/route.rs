@@ -33,7 +33,7 @@ impl ScopedRoute {
             if_index,
             dest_ip,
         };
-        let _span = info_span!("scoped_route_del", %this.dest_ip, this.if_index);
+        let _span = info_span!("scoped_route_add", %this.dest_ip, this.if_index);
         this.handle.route().add(this.message()).execute().await?;
         Ok(this)
     }

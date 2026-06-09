@@ -19,8 +19,11 @@ fn main() -> Result<(), anyhow::Error> {
     tokio_uring::start(async {
         let globals = osal::Globals::new().await?;
         let tun = osal::Tun::new(&globals, None).await?;
+        let _if_addr = tun
+            .add_if_addr(IpAddr::V4(Ipv4Addr::new(10, 33, 33, 1)))
+            .await?;
         let _route = tun
-            .add_route(IpAddr::V4(Ipv4Addr::new(10, 33, 33, 1)))
+            .add_route(IpAddr::V4(Ipv4Addr::new(10, 33, 33, 254)))
             .await?;
 
         info!(
