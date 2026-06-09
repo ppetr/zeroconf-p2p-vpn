@@ -1,6 +1,7 @@
+use futures_util::FutureExt;
 use rtnetlink::{packet_route::route::RouteMessage, Handle, RouteMessageBuilder};
 use std::net::IpAddr;
-use tracing::{error, info_span, Instrument};
+use tracing::{info_span, Instrument};
 
 use crate::osal::Globals;
 
@@ -54,7 +55,6 @@ impl ScopedRoute {
 impl Drop for ScopedRoute {
     fn drop(&mut self) {
         let dest_ip = self.dest_ip;
-        let if_index = self.if_index;
         let span = info_span!("scoped_route_del", %self.dest_ip, self.if_index);
         // Since Drop must be synchronous, we offload the asynchronous
         // route elimination cleanup request onto the Tokio executor.
@@ -63,18 +63,17 @@ impl Drop for ScopedRoute {
         tokio::spawn(
             async move {
                 // Direct equivalent to: ip route del <dest_ip> dev <interface>
-                let result = handle.route().del(message).execute().await;
-                // TODO: Add it to the span.
-                if let Err(err) = result {
-                    error!(%err, "Failed to automatically drop network route");
+                handle.route().del(message).execute().await
+            }
+            .instrument(span)
+            .map(move |result| {
+                if let Err(_) = result {
                     metrics::counter!(
-                    "scoped_route_cleanup_errors_total",
-                    "ip_version" => match dest_ip { IpAddr::V4(_) => "v4", IpAddr::V6(_) => "v6" }
-                )
+                      "scoped_route_cleanup_errors_total",
+                      "ip_version" => match dest_ip { IpAddr::V4(_) => "v4", IpAddr::V6(_) => "v6" })
                     .increment(1);
                 }
-            }
-            .instrument(span),
+            }),
         );
     }
 }

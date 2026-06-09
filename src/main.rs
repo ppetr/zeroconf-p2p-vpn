@@ -1,17 +1,20 @@
 use std::net::{IpAddr, Ipv4Addr};
-use tracing::info;
+use tracing::{info, level_filters::LevelFilter};
 use tracing_subscriber::fmt::format::FmtSpan;
 
 mod osal;
 
 fn main() -> Result<(), anyhow::Error> {
-    // Look for RUST_LOG; if not found, default to "info"
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_span_events(FmtSpan::ENTER | FmtSpan::CLOSE)
         .init();
+    info!(
+        "Logging level is {:?}; change the RUST_LOG environment variable to set a different level",
+        LevelFilter::current()
+    );
 
     tokio_uring::start(async {
         let globals = osal::Globals::new().await?;
