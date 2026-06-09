@@ -6,21 +6,21 @@ Zero-conf p2p VPN
 Architectecture plan
 --------------------
 
-Remaning:
+**Remaning:**
 
 Network Logic, Filtering, and Kernel Integration (L3 Routing)
-^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 This phase transforms our application into an intelligent Point-to-Point router.
 
 Addressing Scheme (Dual-Stack Point-to-Point)
-+++
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 * **IPv6:** Unique Local Addresses (ULA) range (**`fd00::/8`**), where each peer is assigned a unique **`/128` host address** (e.g., generated pseudonahodně or derived deterministically from a public key/certificate hash).
 * **IPv4:** A private range (e.g., within `10.0.0.0/8`), where the local `tun0` is assigned an address with a **`/32`** netmask, and individual connected peers are given isolated **`/32`** addresses as well.
 
 Dynamic Routing Table Management (The Source of Truth)
-+++
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 * **Technology:** **`rtnetlink`** (direct, high-speed binary communication with the Linux network stack).
 * **Key Points:**
@@ -31,7 +31,7 @@ Dynamic Routing Table Management (The Source of Truth)
 
 
 Fast-Path Filtering (The Gatekeeper)
-+++
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 * **Technology:** **`etherparse`**.
 * **Key Points:**
@@ -40,12 +40,12 @@ Fast-Path Filtering (The Gatekeeper)
 
 
 QUIC Transport Layer
-^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 This phase bridges local network traffic securely across the internet to the remote peer.
 
 Data Channel (Unreliable Data Transfer)
-+++
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 * **Technology:** **`quinn`** (or `quiche`) – **QUIC Datagrams** (bounded by Path MTU).
 * **Key Points:**
@@ -53,14 +53,14 @@ Data Channel (Unreliable Data Transfer)
 * If the underlying network drops a packet, retransmission is handled by the inner protocol (e.g., TCP running inside the tunnel). QUIC itself will not retransmit VPN data packets, avoiding the notorious "TCP-over-TCP" congestion collapse.
 
 Control Plane (Reliable Signaling Stream)
-+++
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 * **Key Points:**
 * A standard, reliable QUIC stream runs in parallel alongside the datagram transport.
 * It handles the initial handshake, zero-conf IPv6/IPv4 address negotiation, and signaling messages (e.g., graceful disconnects or "add a subnet behind me" requests).
 
 Architectural Overview of Async Loops (Data Flow)
-^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 After initialization, the entire application will be driven by three primary asynchronous tasks:
 
@@ -71,19 +71,19 @@ After initialization, the entire application will be driven by three primary asy
 This blueprint provides a cohesive, highly efficient system architecture that fully exploits Rust's ownership model and the native optimizations of the Linux kernel.
 
 Observability Implementation Strategy: Tracing & Telemetry
-^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 To ensure robust diagnostic capabilities, the system will utilize the Rust `tracing` ecosystem to capture structured event data. This telemetry will be serialized using the **OpenTelemetry Protocol (OTLP)** via the `prost` library to ensure performance and standardization.
 
 Key Architectural Components
-+++
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 * **Telemetry Foundation:** The `tracing` crate will be used for instrumentation, providing the source for spans and events.
 * **Serialization:** We will use `prost` to generate high-performance Protobuf code based on the official OTLP definitions. This ensures our binary format is both lean and natively compatible with modern observability backends (e.g., Jaeger, Honeycomb).
 * **Transport Layer:** Tracing data will be transmitted over **QUIC streams**. This choice avoids head-of-line blocking and allows for efficient, multiplexed delivery of telemetry packets.
 
 Handling Stream Dynamics
-+++
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 Regarding the "late-joiner" scenario where a consumer connects mid-stream and misses the beginning of active spans, the following approach will be taken:
 
