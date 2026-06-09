@@ -32,14 +32,12 @@ fn main() -> Result<(), anyhow::Error> {
             tun.if_name
         );
 
-        let mut buffer_pool = buffer_pool::BufferPool::new(64, 2048);
+        let mut buffer_pool = buffer_pool::BufferPool::new(64, 2048)?;
         loop {
-            let mut buf = buffer_pool.pop().await;
-            buf.read_frame(&tun.file).await?;
-            if buf.buffer.is_empty() {
+            let buf = buffer_pool.pop().await.read_frame(&tun.file).await?;
+            if buf.is_empty() {
                 continue;
             }
-            let buf = buf.slice();
 
             let n = (&buf).len();
             info!("Received raw packet of length: {} bytes!", n); // Byte 9 of an IPv4 header contains the Protocol (1 = ICMP / Ping)

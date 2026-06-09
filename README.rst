@@ -16,13 +16,13 @@ This phase transforms our application into an intelligent Point-to-Point router.
 Addressing Scheme (Dual-Stack Point-to-Point)
 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-* **IPv6:** Unique Local Addresses (ULA) range (**``fd00::/8``**), where each peer is assigned a unique **``/128`` host address** (e.g., generated pseudonahodně or derived deterministically from a public key/certificate hash).
-* **IPv4:** A private range (e.g., within ``10.0.0.0/8``), where the local ``tun0`` is assigned an address with a **``/32``** netmask, and individual connected peers are given isolated **``/32``** addresses as well.
+* **IPv6:** Unique Local Addresses (ULA) range (``fd00::/8``), where each peer is assigned a unique ``/128`` host address** (e.g., generated pseudonahodně or derived deterministically from a public key/certificate hash).
+* **IPv4:** A private range (e.g., within ``10.0.0.0/8``), where the local ``tun0`` is assigned an address with a ``/32`` netmask, and individual connected peers are given isolated ``/32`` addresses as well.
 
 Dynamic Routing Table Management (The Source of Truth)
 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-* **Technology:** **``rtnetlink``** (direct, high-speed binary communication with the Linux network stack).
+* **Technology:** ``rtnetlink`` (direct, high-speed binary communication with the Linux network stack).
 * **Key Points:**
 * The application maintains a local ``HashMap<IpAddr, PeerHandle>`` of currently connected users.
 * **On-Connect (QUIC Session Established):** As soon as a peer authorizes and its IP is negotiated/assigned, the application immediately uses ``rtnetlink`` to inject host routes into the kernel: ``ip -6 route add [PEER_IPv6]/128 dev tun0`` and ``ip route add [PEER_IPv4]/32 dev tun0``.
@@ -33,7 +33,7 @@ Dynamic Routing Table Management (The Source of Truth)
 Fast-Path Filtering (The Gatekeeper)
 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-* **Technology:** **``etherparse``**.
+* **Technology:** ``etherparse``.
 * **Key Points:**
 * Even though routing decisions are delegated to the kernel, the application performs a zero-allocation validation of the first few bytes (the IP header) immediately after reading a packet from the TUN interface.
 * It validates that the source IP matches the assigned peer and that the destination is legitimate. If validation fails, the packet is immediately dropped, and the buffer returns to the pool, preventing IP spoofing.
@@ -47,7 +47,7 @@ This phase bridges local network traffic securely across the internet to the rem
 Data Channel (Unreliable Data Transfer)
 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-* **Technology:** **``quinn``** (or ``quiche``) – **QUIC Datagrams** (bounded by Path MTU).
+* **Technology:** ``quinn`` (or ``quiche``) – **QUIC Datagrams** (bounded by Path MTU).
 * **Key Points:**
 * IP packets approved by the filtering stage are asynchronously handed over to the QUIC stack as unreliable datagrams.
 * If the underlying network drops a packet, retransmission is handled by the inner protocol (e.g., TCP running inside the tunnel). QUIC itself will not retransmit VPN data packets, avoiding the notorious "TCP-over-TCP" congestion collapse.
