@@ -41,7 +41,7 @@ impl PooledBuffer {
         Ok(PooledBuffer { buffer: read_buf }.into())
     }
 
-    /// Reads a frame from `dev` at offset 0 and returns it as a read-only buffer slice.
+    /// Writes a frame to `dev` at offset 0 and lets the buffer to be returned to the pool.
     pub async fn write_frame(self, dev: &fs::File) -> std::io::Result<()> {
         let PooledBuffer { buffer } = self;
         let buf_len = (&buffer).len();

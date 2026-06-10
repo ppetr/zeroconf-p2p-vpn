@@ -2,7 +2,6 @@ use std::net::{IpAddr, Ipv4Addr};
 use tracing::{info, level_filters::LevelFilter};
 use tracing_subscriber::fmt::format::FmtSpan;
 
-mod buffer_pool;
 mod osal;
 
 fn main() -> Result<(), anyhow::Error> {
@@ -32,7 +31,7 @@ fn main() -> Result<(), anyhow::Error> {
             tun.if_name
         );
 
-        let mut buffer_pool = buffer_pool::BufferPool::new(64, 2048)?;
+        let mut buffer_pool = osal::BufferPool::new(64, 2048)?;
         loop {
             let buf = buffer_pool.pop().await.read_frame(&tun.file).await?;
             if buf.is_empty() {

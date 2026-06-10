@@ -29,7 +29,7 @@ impl<'g> Tun<'g> {
         let (file, if_name) = open_tun_uring(if_name)?;
         let if_index: u32 = get_if_index(&globals.rtnetlink, if_name.clone())
             .await?
-            .expect("unable to determine the interface index");
+            .context("unable to determine the interface index")?;
         let this = Tun {
             globals,
             file,
@@ -68,7 +68,7 @@ impl<'g> Tun<'g> {
 }
 
 async fn get_if_index(handle: &Handle, if_name: String) -> Result<Option<u32>, rtnetlink::Error> {
-    let mut links = handle.link().get().match_name(if_name.clone()).execute();
+    let mut links = handle.link().get().match_name(if_name).execute();
     Ok(links.try_next().await?.map(|l| l.header.index))
 }
 
@@ -89,7 +89,7 @@ fn open_tun_uring(if_name: Option<&str>) -> std::io::Result<(File, String)> {
     let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
 
     // Assign multi-queue flag layouts
-    ifr.ifr_ifru.ifru_flags = (libc::IFF_TUN | libc::IFF_NO_PI | libc::IFF_MULTI_QUEUE) as i16;
+    ifr.ifr_ifru.ifru_flags = (libc::IFF_TUN | libc::IFF_NO_PI) as i16;
 
     // Apply the name filter if a query pattern template is provided
     if let Some(name) = if_name {

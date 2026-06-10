@@ -1,8 +1,10 @@
+pub mod buffer_pool;
 pub mod globals;
 pub mod if_addr;
 pub mod route;
 pub mod tun;
 
+pub use buffer_pool::*;
 pub use globals::*;
 pub use if_addr::*;
 pub use route::*;
