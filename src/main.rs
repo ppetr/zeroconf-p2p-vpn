@@ -1,4 +1,3 @@
-use anyhow::Context;
 use std::net::{IpAddr, Ipv4Addr};
 use tokio::sync::mpsc;
 use tracing::{info, level_filters::LevelFilter, warn};
@@ -33,40 +32,14 @@ fn main() -> Result<(), anyhow::Error> {
             tun.if_name
         );
 
-        let mut buffer_pool = osal::BufferPool::new(64, 2048)?;
         let (rx_uring, mut _rx_handle) = mpsc::channel::<osal::PooledSlice>(64);
-        let (_tx_handle, mut tx_uring) = mpsc::channel::<osal::PooledSlice>(64);
-        let tun_ref = &tun;
-
-        let rx_task = async move {
-            Ok::<(), anyhow::Error>(loop {
-                let buf = match buffer_pool.pop().await.read_frame(&tun_ref.file).await {
-                    Err(err) if osal::tun::error::is_tun_transient(&err) => continue,
-                    r => r?,
-                };
-                info!("Received packet of length {}", (&buf).len());
-                if !buf.is_empty() {
-                    rx_uring.send(buf).await?;
-                }
-            })
+        let (_tx_handle, tx_uring) = mpsc::channel::<osal::PooledSlice>(64);
+        let opts = osal::TunControlOpts {
+            buffer_pool: 512,
+            tx_packet: tx_uring,
+            rx_packet: rx_uring,
         };
-        let tx_task = async move {
-            Ok::<(), anyhow::Error>(loop {
-                let buf = tx_uring.recv().await.context("Channel dropped")?;
-                match buf.write_frame(&tun_ref.file).await {
-                    Err(err) if osal::tun::error::is_tun_transient(&err) => continue,
-                    r => r?,
-                };
-            })
-        };
-        if let Err(err) = tokio::select! {
-            err = rx_task => {
-                err.context("rx task")
-            }
-            err = tx_task => {
-                err.context("tx task")
-            }
-        } {
+        if let Err(err) = tun.control(opts).await {
             warn!("{:?}", err)
         }
         Ok(())

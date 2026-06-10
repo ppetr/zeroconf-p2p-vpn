@@ -9,15 +9,24 @@ use std::fs::OpenOptions;
 use std::net::IpAddr;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::fs::OpenOptionsExt;
+use tokio::sync::mpsc;
 use tokio_uring::fs::File;
 
+use crate::osal::BufferPool;
 use crate::osal::Globals;
+use crate::osal::PooledSlice;
 use crate::osal::ScopedIfAddr;
 use crate::osal::ScopedRoute;
 
 // 1. Fixed: Use ioctl_write_ptr_bad! for commands passing a struct pointer.
 // This generates a type-safe function signature that accepts an *const libc::ifreq parameter.
 nix::ioctl_write_ptr_bad!(tunsetiff, libc::TUNSETIFF, libc::ifreq);
+
+pub struct TunControlOpts {
+    pub buffer_pool: usize,
+    pub tx_packet: mpsc::Receiver<PooledSlice>,
+    pub rx_packet: mpsc::Sender<PooledSlice>,
+}
 
 pub struct Tun<'g> {
     globals: &'g Globals,
@@ -66,6 +75,42 @@ impl<'g> Tun<'g> {
         ScopedRoute::new(self.globals, self.if_index, ip)
             .await
             .context("when registering route")
+    }
+
+    pub async fn control(&self, opts: TunControlOpts) -> Result<()> {
+        let mut buffer_pool = BufferPool::new(opts.buffer_pool, 2048)?;
+
+        let file_ref = &self.file;
+        let rx_packet = opts.rx_packet;
+        let rx_task = async move {
+            Ok::<(), anyhow::Error>(loop {
+                let buf = match buffer_pool.pop().await.read_frame(&file_ref).await {
+                    Err(err) if error::is_tun_transient(&err) => continue,
+                    r => r?,
+                };
+                if !buf.is_empty() {
+                    rx_packet.send(buf).await?;
+                }
+            })
+        };
+        let mut tx_packet = opts.tx_packet;
+        let tx_task = async move {
+            Ok::<(), anyhow::Error>(loop {
+                let buf = tx_packet.recv().await.context("Channel dropped")?;
+                match buf.write_frame(&file_ref).await {
+                    Err(err) if error::is_tun_transient(&err) => continue,
+                    r => r?,
+                };
+            })
+        };
+        tokio::select! {
+            err = rx_task => {
+                err.context("rx task")
+            }
+            err = tx_task => {
+                err.context("tx task")
+            }
+        }
     }
 }
 
