@@ -1,5 +1,7 @@
+use anyhow::Context;
 use std::net::{IpAddr, Ipv4Addr};
-use tracing::{info, level_filters::LevelFilter};
+use tokio::sync::mpsc;
+use tracing::{info, level_filters::LevelFilter, warn};
 use tracing_subscriber::fmt::format::FmtSpan;
 
 mod osal;
@@ -32,23 +34,37 @@ fn main() -> Result<(), anyhow::Error> {
         );
 
         let mut buffer_pool = osal::BufferPool::new(64, 2048)?;
-        loop {
-            let buf = buffer_pool.pop().await.read_frame(&tun.file).await?;
-            if buf.is_empty() {
-                continue;
-            }
+        let (rx_uring, mut _rx_handle) = mpsc::channel::<osal::PooledSlice>(64);
+        let (_tx_handle, mut tx_uring) = mpsc::channel::<osal::PooledSlice>(64);
+        let tun_ref = &tun;
 
-            let n = (&buf).len();
-            info!("Received raw packet of length: {} bytes!", n); // Byte 9 of an IPv4 header contains the Protocol (1 = ICMP / Ping)
-            if n > 20 {
-                info!("Protocol Byte {}", (&buf)[9]);
+        let rx_task = async move {
+            Ok::<(), anyhow::Error>(loop {
+                let buf: osal::PooledSlice =
+                    buffer_pool.pop().await.read_frame(&tun_ref.file).await?;
+                info!("Received packet of length {}", (&buf).len());
+                if !buf.is_empty() {
+                    rx_uring.send(buf).await?;
+                }
+            })
+        };
+        let tx_task = async move {
+            Ok::<(), anyhow::Error>(loop {
+                let buf = tx_uring.recv().await.context("Channel dropped")?;
+                // TODO: Check that the buffer belongs to the pool, if possible.
+                buf.write_frame(&tun_ref.file).await?;
+            })
+        };
+        if let Err(err) = tokio::select! {
+            err = rx_task => {
+                err.context("rx task")
             }
-            /*
-            let (write_result, written_buf) = tun.file.write_at(read_buf.slice(..n), 0).submit().await;
-            write_result?;
-
-            buf = written_buf.into_inner();
-            */
+            err = tx_task => {
+                err.context("tx task")
+            }
+        } {
+            warn!("{:?}", err)
         }
+        Ok(())
     })
 }
