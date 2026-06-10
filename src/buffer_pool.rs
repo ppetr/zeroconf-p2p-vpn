@@ -10,9 +10,8 @@ pub struct BufferPool {
 
 impl BufferPool {
     pub fn new(count: usize, buf_size: usize) -> Result<BufferPool> {
-        let pool = FixedBufPool::new(
-            std::iter::repeat_with(|| Vec::with_capacity(buf_size)).take(count),
-        );
+        let pool =
+            FixedBufPool::new(std::iter::repeat_with(|| Vec::with_capacity(buf_size)).take(count));
         pool.register()?;
         // TODO: unregister
         Ok(BufferPool { buf_size, pool })
@@ -34,12 +33,41 @@ pub struct PooledBuffer {
 }
 
 impl PooledBuffer {
-    /// Reads a frame from `file` and returns it as a read-only buffer slice.
-    pub async fn read_frame(self, file: &fs::File) -> std::io::Result<PooledSlice> {
+    /// Reads a frame from `dev` (at offset 0) and returns it as a read-only buffer slice.
+    pub async fn read_frame(self, dev: &fs::File) -> std::io::Result<PooledSlice> {
         let PooledBuffer { buffer } = self;
-        let (length, read_buf) = file.read_fixed_at(buffer, 0).await;
+        let (length, read_buf) = dev.read_fixed_at(buffer, 0).await;
         length?;
         Ok(PooledBuffer { buffer: read_buf }.into())
+    }
+
+    /// Reads a frame from `dev` at offset 0 and returns it as a read-only buffer slice.
+    pub async fn write_frame(self, dev: &fs::File) -> std::io::Result<()> {
+        let PooledBuffer { buffer } = self;
+        let buf_len = (&buffer).len();
+        let (written_len, _write_buf) = dev.write_fixed_at(buffer, 0).await;
+        let written_len = written_len?;
+        if written_len != buf_len {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Buffer length {} != written {}", buf_len, written_len),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl std::ops::Deref for PooledBuffer {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.buffer.deref()
+    }
+}
+
+impl std::ops::DerefMut for PooledBuffer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.buffer.deref_mut()
     }
 }
 
@@ -59,6 +87,6 @@ impl std::ops::Deref for PooledSlice {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        self.owned.buffer.deref()
+        self.owned.deref()
     }
 }
