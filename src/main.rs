@@ -40,8 +40,10 @@ fn main() -> Result<(), anyhow::Error> {
 
         let rx_task = async move {
             Ok::<(), anyhow::Error>(loop {
-                let buf: osal::PooledSlice =
-                    buffer_pool.pop().await.read_frame(&tun_ref.file).await?;
+                let buf = match buffer_pool.pop().await.read_frame(&tun_ref.file).await {
+                    Err(err) if osal::tun::error::is_tun_transient(&err) => continue,
+                    r => r?,
+                };
                 info!("Received packet of length {}", (&buf).len());
                 if !buf.is_empty() {
                     rx_uring.send(buf).await?;
@@ -51,8 +53,10 @@ fn main() -> Result<(), anyhow::Error> {
         let tx_task = async move {
             Ok::<(), anyhow::Error>(loop {
                 let buf = tx_uring.recv().await.context("Channel dropped")?;
-                // TODO: Check that the buffer belongs to the pool, if possible.
-                buf.write_frame(&tun_ref.file).await?;
+                match buf.write_frame(&tun_ref.file).await {
+                    Err(err) if osal::tun::error::is_tun_transient(&err) => continue,
+                    r => r?,
+                };
             })
         };
         if let Err(err) = tokio::select! {

@@ -1,3 +1,5 @@
+pub mod error;
+
 use anyhow::{Context, Result};
 use futures_util::stream::TryStreamExt;
 use nix::libc;
