@@ -3,6 +3,7 @@ use tokio::sync::mpsc;
 use tracing::{info, level_filters::LevelFilter, warn};
 use tracing_subscriber::fmt::format::FmtSpan;
 
+mod addr;
 mod osal;
 
 fn main() -> Result<(), anyhow::Error> {
