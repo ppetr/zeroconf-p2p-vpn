@@ -4,6 +4,13 @@ use iroh::{PublicKey, SecretKey, Signature};
 use std::io::{Error, ErrorKind};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+/// A randomly-generated 40-bit Global ID within the 0xfd00
+/// https://en.wikipedia.org/wiki/Unique_local_address. All traffic of this VPN is expected to be
+/// only within this (very large) network.
+/// The default Subnet ID is 0, but clients can choose their own SubnetID (16-bit) in case of
+/// (unlikely) 64-bit collisions in the default 0 subnet.
+pub const VPN_IPV6_PREFIX: Ipv6Net = Ipv6Net::new_assert(Ipv6Addr::new(0xfdbd, 0xa6ce, 0x654d, 0, 0, 0, 0, 0), 48);
+
 /// Generates an IP address within the given subnet based on a digital signature.
 ///
 /// 1. The address is serialized
@@ -14,9 +21,10 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 /// 3. The trailing bytes of the signature are used to generate the host part of the new IP address.
 ///    - In case this ends up an IPv4 broadcast address (all bits 1), it's decremented by 1.
 ///
-/// This ensures that the address is computed in a deterministic manner by the secret key owner, but
-/// cryptographically unpredictable and pseudo-random. And can be verified by anyone knowing the
-/// public key.
+/// This ensures that
+/// - The address is computed in a deterministic manner by the secret key owner.
+/// - Is but cryptographically unpredictable and pseudo-random.
+/// - Can be verified by anyone knowing the public key.
 pub fn generate_signed_ip(net: &IpNet, secret_key: &SecretKey) -> (IpAddr, Signature) {
     let signature = secret_key.sign(&serialize_network(net));
     let ip = generate_signed_ip_with_signature(net, &signature);
