@@ -9,7 +9,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 /// only within this (very large) network.
 /// The default Subnet ID is 0, but clients can choose their own SubnetID (16-bit) in case of
 /// (unlikely) 64-bit collisions in the default 0 subnet.
-pub const VPN_IPV6_PREFIX: Ipv6Net = Ipv6Net::new_assert(Ipv6Addr::new(0xfdbd, 0xa6ce, 0x654d, 0, 0, 0, 0, 0), 48);
+pub const VPN_IPV6_PREFIX: Ipv6Net =
+    Ipv6Net::new_assert(Ipv6Addr::new(0xfdbd, 0xa6ce, 0x654d, 0, 0, 0, 0, 0), 48);
 
 /// Generates an IP address within the given subnet based on a digital signature.
 ///

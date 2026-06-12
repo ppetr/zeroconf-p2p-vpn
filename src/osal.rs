@@ -1,11 +1,5 @@
-pub mod buffer_pool;
-pub mod globals;
-pub mod if_addr;
-pub mod route;
-pub mod tun;
+pub mod tun {
+    pub mod error;
+}
 
-pub use buffer_pool::*;
-pub use globals::*;
-pub use if_addr::*;
-pub use route::*;
-pub use tun::*;
+pub use tun::error::*;

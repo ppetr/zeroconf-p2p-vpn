@@ -1,6 +1,5 @@
-use anyhow::Result;
 use tokio::sync::mpsc;
-use tokio_uring::fs;
+use tun_rs::AsyncDevice;
 
 /// A fixed-size, preallocated pool of `Vec<u8>` buffers.
 pub struct BufferPool {
@@ -9,15 +8,16 @@ pub struct BufferPool {
 }
 
 impl BufferPool {
-    pub fn new(count: usize, buf_size: usize) -> Result<BufferPool> {
+    pub fn new(count: usize, buf_size: usize) -> BufferPool {
         let (tx, rx) = mpsc::channel(count);
         for _ in 0..count {
-            tx.try_send(Vec::with_capacity(buf_size))?;
+            tx.try_send(Vec::with_capacity(buf_size))
+                .expect("when filling up BufferPool");
         }
-        Ok(BufferPool {
+        BufferPool {
             pool: rx,
             reclaim: tx,
-        })
+        }
     }
 
     /// Gets an empty buffer from the pool. If no buffer is available, blocks until one is
@@ -43,27 +43,29 @@ pub struct PooledBuffer {
 
 impl PooledBuffer {
     /// Reads a frame from `dev` (at offset 0) and returns it as a read-only buffer slice.
-    pub async fn read_frame(mut self, dev: &fs::File) -> std::io::Result<PooledSlice> {
-        let buffer = std::mem::take(&mut self.buffer);
-        let (length, read_buf) = dev.read_at(buffer, 0).await;
-        length?;
-        Ok(PooledBuffer {
-            buffer: read_buf,
-            reclaim: self.reclaim.clone(),
+    pub async fn read_frame(mut self, dev: &AsyncDevice) -> std::io::Result<PooledSlice> {
+        tracing::info!("Reading frame");
+        unsafe {
+            self.buffer.set_len(self.buffer.capacity());
         }
-        .into())
+        let len = dev.recv(&mut self.buffer).await?;
+        unsafe {
+            self.buffer.set_len(len);
+        }
+        Ok(self.into())
     }
 
     /// Writes a frame to `dev` at offset 0 and lets the buffer to be returned to the pool.
-    pub async fn write_frame(mut self, dev: &fs::File) -> std::io::Result<()> {
-        let buffer = std::mem::take(&mut self.buffer);
-        let buf_len = (&buffer).len();
-        let (written_len, _write_buf) = dev.write_at(buffer, 0).submit().await;
-        let written_len = written_len?;
-        if written_len != buf_len {
+    pub async fn write_frame(self, dev: &AsyncDevice) -> std::io::Result<()> {
+        let written_len = dev.send(&self.buffer).await?;
+        if written_len != self.buffer.len() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                format!("Buffer length {} != written {}", buf_len, written_len),
+                format!(
+                    "Buffer length {} != written {}",
+                    self.buffer.len(),
+                    written_len
+                ),
             ));
         }
         Ok(())
@@ -72,8 +74,10 @@ impl PooledBuffer {
 
 impl Drop for PooledBuffer {
     fn drop(&mut self) {
-        if self.buffer.is_empty() {
-            return;
+        assert!(self.buffer.capacity() > 0);
+        // Ensure no uninitialized memory leaks out.
+        unsafe {
+            self.buffer.set_len(0);
         }
         if let Some(sender) = self.reclaim.upgrade() {
             match sender.try_send(std::mem::take(&mut self.buffer)) {
@@ -105,7 +109,7 @@ pub struct PooledSlice {
 
 impl PooledSlice {
     /// Writes a frame to `dev` at offset 0 and lets the buffer to be returned to the pool.
-    pub async fn write_frame(self, dev: &fs::File) -> std::io::Result<()> {
+    pub async fn write_frame(self, dev: &AsyncDevice) -> std::io::Result<()> {
         self.owned.write_frame(dev).await
     }
 }
