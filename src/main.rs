@@ -5,6 +5,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 
 mod addr;
 mod osal;
+mod proto;
 
 fn main() -> Result<(), anyhow::Error> {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()

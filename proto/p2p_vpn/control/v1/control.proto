@@ -1,0 +1,47 @@
+syntax = "proto3";
+// edition = "2024";
+
+package p2p_vpn.control.v1;
+
+message HostAddress {
+  // The host's generated address (IPv6, or less commonly IPv4) together with
+  // an appropriate prefix length in the CIDR notation.
+  // See the Rust function `generate_signed_ip` for details how these addresses
+  // are constructed.
+  string peer_network = 1;
+  // Cryptographic signature of the address by the peer's secret key.
+  bytes peer_network_signature = 2;
+}
+
+// WARNING: Subject to change, when a more standard replacement is found.
+message Status {
+  // An error code. 0 means no error.
+  int32 code = 1;
+  // An optional text description of the error.
+  optional string message = 2;
+}
+
+// Once a QUIC connection is established, both parties are required to send a
+// Advertise control message, otherwise they can't route traffic to each other.
+//
+// Afterwards any party can transmit an asynchronous controll message any time.
+message Control {
+  // QUIC stream ID when replying to a previous message.
+  int64 reply_to = 1;
+  optional Status status = 2;
+  oneof command {
+    Advertise advertise = 3;
+    // Request graceful disconnect, which should be performed by the remote
+    // peer. This allows the remote peer to receive any explaiing `status`.
+    Disconnect disconnect = 4;
+  }
+}
+
+// Advertises at which addresses the sender can be reached. Depending on the
+// peer's configuration it might accept only some or none of them (in the
+// latter case it initiates `Disconnect`).
+message Advertise {
+  repeated HostAddress own_addresses = 2;
+}
+
+message Disconnect {}
