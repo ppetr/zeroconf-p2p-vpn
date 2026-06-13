@@ -1,3 +1,5 @@
+use std::ops::{Deref, DerefMut};
+use tokio::io::ReadBuf;
 use tokio::sync::mpsc;
 use tun_rs::AsyncDevice;
 
@@ -13,7 +15,8 @@ impl BufferPool {
         for _ in 0..count {
             let mut v = Vec::with_capacity(buf_size);
             v.resize(buf_size, 0);
-            tx.try_send(v.into_boxed_slice()).expect("when filling up BufferPool");
+            tx.try_send(v.into_boxed_slice())
+                .expect("when filling up BufferPool");
         }
         BufferPool {
             pool: rx,
@@ -30,6 +33,7 @@ impl BufferPool {
                 .recv()
                 .await
                 .expect("`pool` can't be closed since it's held by `self`"),
+            filled_len: 0,
             reclaim: self.reclaim.downgrade(),
         }
     }
@@ -40,18 +44,28 @@ impl BufferPool {
 pub struct PooledBuffer {
     /// Preallocated and initialized to a given capacity/
     buffer: Box<[u8]>,
+    filled_len: usize,
     reclaim: mpsc::WeakSender<Box<[u8]>>,
 }
 
 impl PooledBuffer {
-    pub fn into_slice(self, filled_len: usize) -> PooledSlice {
-        PooledSlice{ owned: self, filled_len }
+    /// Returns a scoped `ReadBuf` that allows appending to the slice.
+    pub fn read_buf<'a>(&'a mut self) -> UpdatingReadBuf<'a> {
+        let filled_before = self.filled_len;
+        UpdatingReadBuf {
+            target: &mut self.filled_len,
+            buf: ReadBuf::new(&mut self.buffer[filled_before..]),
+        }
     }
 
-    /// Reads a frame from `dev` (at offset 0) and returns it as a read-only buffer slice.
+    /// Reads a frame from `dev` and returns it as a read-only buffer slice.
     pub async fn read_frame(mut self, dev: &AsyncDevice) -> std::io::Result<PooledSlice> {
-        let len = dev.recv(&mut self.buffer).await?;
-        Ok(self.into_slice(len))
+        {
+            let mut updater = self.read_buf();
+            let len = dev.recv(&mut updater.initialized_mut()).await?;
+            (&mut updater).advance(len);
+        }
+        Ok(self.into())
     }
 }
 
@@ -67,35 +81,59 @@ impl Drop for PooledBuffer {
     }
 }
 
-impl std::ops::Deref for PooledBuffer {
+impl Deref for PooledBuffer {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        self.buffer.deref()
+        &self.buffer[..self.filled_len]
     }
 }
 
-impl std::ops::DerefMut for PooledBuffer {
+pub struct UpdatingReadBuf<'a> {
+    target: &'a mut usize,
+    buf: ReadBuf<'a>,
+}
+
+/// Advances filled size of the underlying `PooledBuffer`.
+impl<'a> Drop for UpdatingReadBuf<'a> {
+    fn drop(&mut self) {
+        *self.target += self.buf.filled().len()
+    }
+}
+
+impl<'a> Deref for UpdatingReadBuf<'a> {
+    type Target = ReadBuf<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.buf
+    }
+}
+
+impl<'a> DerefMut for UpdatingReadBuf<'a> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.buffer.deref_mut()
+        &mut self.buf
     }
 }
 
+/// An owning, read-only view to a `PooledBuffer`.
 pub struct PooledSlice {
     owned: PooledBuffer,
-    filled_len: usize,
 }
 
 impl PooledSlice {
-    /// Writes a frame to `dev` at offset 0 and lets the buffer to be returned to the pool.
+    pub fn clear(self) -> PooledBuffer {
+        self.owned
+    }
+
+    /// Writes a frame to `dev` and lets the buffer to be returned to the pool.
     pub async fn write_frame(self, dev: &AsyncDevice) -> std::io::Result<()> {
         let written_len = dev.send(&self.owned.buffer).await?;
-        if written_len != self.filled_len {
+        if written_len != (&self.owned).len() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 format!(
                     "Buffer length {} != written {}",
-                    self.filled_len,
+                    (&self.owned).filled_len,
                     written_len
                 ),
             ));
@@ -104,10 +142,16 @@ impl PooledSlice {
     }
 }
 
-impl std::ops::Deref for PooledSlice {
+impl Deref for PooledSlice {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        &self.owned[..self.filled_len]
+        &self.owned
+    }
+}
+
+impl From<PooledBuffer> for PooledSlice {
+    fn from(owned: PooledBuffer) -> PooledSlice {
+        PooledSlice { owned }
     }
 }
