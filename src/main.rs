@@ -7,6 +7,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 mod addr;
 mod buffer_pool;
 mod osal;
+mod peer;
 mod proto;
 mod route;
 mod tun;

@@ -10,7 +10,7 @@ pub mod p2p_vpn {
     }
 }
 
-use p2p_vpn::control::v1;
+pub use p2p_vpn::control::v1;
 
 const MAX_MESSAGE_SIZE: usize = 2048;
 
@@ -18,7 +18,9 @@ const MAX_MESSAGE_SIZE: usize = 2048;
 pub async fn read_control(conn: &Connection) -> Result<v1::Control> {
     let mut stream = conn.accept_uni().await?;
     let control = read_control_stream(&mut stream).await;
-    stream.stop(/*error_code=*/VarInt::from_u32(control.as_ref().map_or(1, |_| 0)))?;
+    stream.stop(
+        /*error_code=*/ VarInt::from_u32(control.as_ref().map_or(1, |_| 0)),
+    )?;
     control
 }
 

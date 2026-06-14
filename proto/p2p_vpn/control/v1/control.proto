@@ -3,16 +3,6 @@ syntax = "proto3";
 
 package p2p_vpn.control.v1;
 
-message HostAddress {
-  // The host's generated address (IPv6, or less commonly IPv4) together with
-  // an appropriate prefix length in the CIDR notation.
-  // See the Rust function `generate_signed_ip` for details how these addresses
-  // are constructed.
-  string peer_network = 1;
-  // Cryptographic signature of the address by the peer's secret key.
-  bytes peer_network_signature = 2;
-}
-
 // WARNING: Subject to change, when a more standard replacement is found.
 message Status {
   // An error code. 0 means no error.
@@ -35,6 +25,16 @@ message Control {
     // peer. This allows the remote peer to receive any explaiing `status`.
     Disconnect disconnect = 4;
   }
+}
+
+message HostAddress {
+  // The host's generated address (IPv6, or less commonly IPv4) together with
+  // an appropriate prefix length in the CIDR notation.
+  // See the Rust function `generate_signed_ip` for details how these addresses
+  // are constructed.
+  string peer_network = 1;
+  // Cryptographic signature of the address by the peer's secret key.
+  bytes peer_network_signature = 2;
 }
 
 // Advertises at which addresses the sender can be reached. Depending on the
