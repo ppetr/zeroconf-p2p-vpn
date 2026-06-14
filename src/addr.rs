@@ -19,7 +19,8 @@ pub const VPN_IPV6_PREFIX: Ipv6Net =
 ///    b. The full network part of `net` as big-endian (BE) bytes; that is, 32 bytes for IPv6 and 4
 ///       bytes for IPv4.
 /// 2. Signature is computed from this message.
-/// 3. The trailing bytes of the signature are used to generate the host part of the new IP address.
+/// 3. The initial bytes (in the little endian order) of the signature are used to generate the host
+///    part of the new IP address.
 ///    - In case this ends up an IPv4 broadcast address (all bits 1), it's decremented by 1.
 ///
 /// This ensures that
@@ -27,7 +28,7 @@ pub const VPN_IPV6_PREFIX: Ipv6Net =
 /// - Is but cryptographically unpredictable and pseudo-random.
 /// - Can be verified by anyone knowing the public key.
 pub fn generate_signed_ip(net: &IpNet, secret_key: &SecretKey) -> (IpAddr, Signature) {
-    let signature = secret_key.sign(&serialize_network(net));
+    let signature = secret_key.sign(&serialize_network(&net.trunc()));
     let ip = generate_signed_ip_with_signature(net, &signature);
     (ip, signature)
 }
@@ -78,12 +79,9 @@ fn serialize_network(net: &IpNet) -> Vec<u8> {
 /// Derive the IP address from an existing signature.
 fn generate_signed_ip_with_signature(net: &IpNet, signature: &Signature) -> IpAddr {
     let signature_bytes = signature.to_bytes();
-    let entropy_128 = u128::from_be_bytes(signature_bytes[48..64].try_into().unwrap());
+    let entropy_128 = u128::from_le_bytes(signature_bytes[..16].try_into().unwrap());
     match net {
-        IpNet::V4(net4) => {
-            let entropy_32 = entropy_128 as u32;
-            IpAddr::V4(derive_ipv4(net4, entropy_32))
-        }
+        IpNet::V4(net4) => IpAddr::V4(derive_ipv4(net4, entropy_128 as u32)),
         IpNet::V6(net6) => IpAddr::V6(derive_ipv6(net6, entropy_128)),
     }
 }
