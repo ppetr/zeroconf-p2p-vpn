@@ -26,12 +26,15 @@ async fn main() -> Result<(), anyhow::Error> {
     );
 
     let net_route_handle = Arc::new(net_route::Handle::new()?);
-    let tun = tun::Tun::new(net_route_handle.clone(), None).await?;
+    // TODO: net_route_handle
+    let tun = tun::Tun::new(None).await?;
     tun.add_if_addr(IpAddr::V4(Ipv4Addr::new(10, 33, 33, 1)))
         .await?;
+    /* TODO
     let _route = tun
         .add_route(IpAddr::V4(Ipv4Addr::new(10, 33, 33, 254)))
         .await?;
+    */
 
     info!("TUN device {} opened. Starting echo loop...", tun.if_name);
 

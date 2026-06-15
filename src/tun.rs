@@ -1,13 +1,11 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use std::net::IpAddr;
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use tun_rs::{AsyncDevice, DeviceBuilder};
 
 pub use crate::buffer_pool::{write_frame, BufferPool, PooledSlice};
 use crate::osal;
-pub use crate::route::ScopedRoute;
 
 pub struct TunControlOpts {
     pub buffer_pool: usize,
@@ -19,11 +17,10 @@ pub struct Tun {
     pub device: AsyncDevice,
     pub if_name: String,
     if_index: u32,
-    route_handle: Arc<net_route::Handle>,
 }
 
 impl Tun {
-    pub async fn new(route_handle: Arc<net_route::Handle>, if_name: Option<&str>) -> Result<Tun> {
+    pub async fn new(if_name: Option<&str>) -> Result<Tun> {
         let builder = DeviceBuilder::new();
         let builder = if let Some(name) = if_name {
             builder.name(name)
@@ -39,8 +36,11 @@ impl Tun {
             device: dev,
             if_name: name,
             if_index,
-            route_handle,
         })
+    }
+
+    pub fn if_index(&self) -> u32 {
+        self.if_index
     }
 
     /// Assigns an IP address to the local TUN interface.
@@ -53,13 +53,6 @@ impl Tun {
             "when setting network address '{}' on TUN device '{}'",
             ip, self.if_name
         ))
-    }
-
-    /// Registers a host route into the system routing table directing traffic to this interface.
-    pub async fn add_route(&self, ip: IpAddr) -> Result<ScopedRoute> {
-        ScopedRoute::new(self.route_handle.clone(), self.if_index, ip)
-            .await
-            .context("when registering route")
     }
 
     pub async fn control(self, opts: TunControlOpts) -> Result<()> {
