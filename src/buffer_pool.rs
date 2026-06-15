@@ -1,3 +1,4 @@
+use bytes::buf::{BufMut, UninitSlice};
 use std::ops::{Deref, DerefMut};
 use tokio::io::ReadBuf;
 use tokio::sync::mpsc;
@@ -81,6 +82,40 @@ impl Drop for PooledBuffer {
     }
 }
 
+unsafe impl BufMut for PooledBuffer {
+    fn chunk_mut(&mut self) -> &mut UninitSlice {
+        UninitSlice::new(&mut self.buffer[self.filled_len..])
+    }
+
+    unsafe fn advance_mut(&mut self, cnt: usize) {
+        if cnt > self.remaining_mut() {
+            panic!(
+                "advance_mut called at offset {} with value {} beyond the buffer size {}",
+                cnt,
+                self.filled_len,
+                self.buffer.len()
+            );
+        }
+        self.filled_len += cnt;
+    }
+
+    fn remaining_mut(&self) -> usize {
+        self.buffer.len() - self.filled_len
+    }
+}
+
+/// Writes a frame to `dev` and lets the buffer to be returned to the pool.
+pub async fn write_frame(buffer: &[u8], dev: &AsyncDevice) -> std::io::Result<()> {
+    let written_len = dev.send(buffer).await?;
+    if written_len != buffer.len() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Buffer length {} != written {}", buffer.len(), written_len),
+        ));
+    }
+    Ok(())
+}
+
 impl Deref for PooledBuffer {
     type Target = [u8];
 
@@ -124,22 +159,6 @@ impl PooledSlice {
     pub fn clear(self) -> PooledBuffer {
         self.owned
     }
-
-    /// Writes a frame to `dev` and lets the buffer to be returned to the pool.
-    pub async fn write_frame(self, dev: &AsyncDevice) -> std::io::Result<()> {
-        let written_len = dev.send(&self.owned.buffer).await?;
-        if written_len != (&self.owned).len() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!(
-                    "Buffer length {} != written {}",
-                    (&self.owned).filled_len,
-                    written_len
-                ),
-            ));
-        }
-        Ok(())
-    }
 }
 
 impl Deref for PooledSlice {
@@ -147,6 +166,12 @@ impl Deref for PooledSlice {
 
     fn deref(&self) -> &Self::Target {
         &self.owned
+    }
+}
+
+impl AsRef<[u8]> for PooledSlice {
+    fn as_ref(&self) -> &[u8] {
+        self.deref()
     }
 }
 
