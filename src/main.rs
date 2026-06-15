@@ -36,7 +36,7 @@ async fn main() -> Result<(), anyhow::Error> {
     info!("TUN device {} opened. Starting echo loop...", tun.if_name);
 
     let (rx_uring, mut _rx_handle) = mpsc::channel::<buffer_pool::PooledSlice>(64);
-    let (_tx_handle, tx_uring) = mpsc::channel::<buffer_pool::PooledSlice>(64);
+    let (_tx_handle, tx_uring) = mpsc::channel::<bytes::Bytes>(64);
     let opts = tun::TunControlOpts {
         buffer_pool: 512,
         tx_packet: tx_uring,
