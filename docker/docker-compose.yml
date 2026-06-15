@@ -1,0 +1,36 @@
+services:
+  node-alice:
+    build:
+      context: ..
+      dockerfile: ./docker/Dockerfile
+    container_name: node_alice
+    cap_add:
+      - NET_ADMIN                      # Nutné pro tun0
+    devices:
+      - /dev/net/tun:/dev/net/tun      # Přístup k TUN zařízení
+    networks:
+      vpn_test_net:
+        ipv4_address: 172.25.0.2
+    command: --server
+
+  node-bob:
+    build:
+      context: ..
+      dockerfile: ./docker/Dockerfile
+    container_name: node_bob
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    networks:
+      vpn_test_net:
+        ipv4_address: 172.25.0.3
+    command: --client
+
+networks:
+  vpn_test_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/24
+
