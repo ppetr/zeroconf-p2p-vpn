@@ -64,9 +64,9 @@ mod tests {
 
     // Helper to create a valid proto::v1::HostAddress for testing
     fn make_host_address(net: &IpNet, secret_key: &SecretKey) -> proto::v1::HostAddress {
-        let (ip, signature) = addr::generate_signed_ip(net, secret_key);
+        let (ipnet, signature) = addr::generate_signed_ipnet(net, secret_key);
         proto::v1::HostAddress {
-            peer_network: format!("{}/{}", ip, net.prefix_len()),
+            peer_network: ipnet.to_string(),
             peer_network_signature: signature.to_bytes().to_vec(),
         }
     }
@@ -146,7 +146,7 @@ mod tests {
         let advertise = proto::v1::Advertise {
             own_addresses: vec![proto::v1::HostAddress {
                 peer_network: "10.1.1.42/24".to_string(),
-                // Ed25519 signatures must be exactly 64 bytes
+                // Ed25519 signatures must be exactly 32 bytes
                 peer_network_signature: vec![0u8; 32],
             }],
         };
