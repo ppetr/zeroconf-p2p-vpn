@@ -3,12 +3,14 @@ syntax = "proto3";
 
 package p2p_vpn.control.v1;
 
-// WARNING: Subject to change, when a more standard replacement is found.
+// The fields and their numbers match directly
+// https://github.com/googleapis/googleapis/blob/master/google/rpc/status.proto
 message Status {
-  // An error code. 0 means no error.
+  // The status code, which should be an enum value of thin_status::ErrorCode.
   int32 code = 1;
   // An optional text description of the error.
   optional string message = 2;
+  // repeated google.protobuf.Any details = 3;
 }
 
 // Once a QUIC connection is established, both parties are required to send a

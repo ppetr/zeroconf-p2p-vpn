@@ -27,7 +27,7 @@ pub async fn read_control(conn: &Connection) -> Result<v1::Control> {
 async fn read_control_stream(stream: &mut RecvStream) -> Result<v1::Control> {
     let buf = stream.read_to_end(MAX_MESSAGE_SIZE).await?;
     let control = v1::Control::decode(buf.as_slice())?;
-    tracing::debug!("Read control command: {:?}", control);
+    tracing::debug!(control = ?control, "Read control command");
     Ok(control)
 }
 
