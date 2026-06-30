@@ -1,7 +1,8 @@
-use std::net::{IpAddr, Ipv4Addr};
+use anyhow::Context;
+use iroh::PublicKey;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{info, level_filters::LevelFilter, warn};
+use tracing::{info, level_filters::LevelFilter};
 use tracing_subscriber::fmt::format::FmtSpan;
 
 mod addr;
@@ -11,6 +12,8 @@ mod peer;
 mod proto;
 mod route;
 mod tun;
+
+use secure_p2p_transport::{load_key_from_disk, N0Discovery, NodeExtraConfig, TransportNode};
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
@@ -26,27 +29,88 @@ async fn main() -> Result<(), anyhow::Error> {
     );
 
     let net_route_handle = Arc::new(net_route::Handle::new()?);
-    // TODO: net_route_handle
     let tun = tun::Tun::new(None).await?;
-    tun.add_if_addr(IpAddr::V4(Ipv4Addr::new(10, 33, 33, 1)))
-        .await?;
-    /* TODO
-    let _route = tun
-        .add_route(IpAddr::V4(Ipv4Addr::new(10, 33, 33, 254)))
-        .await?;
-    */
 
-    info!("TUN device {} opened. Starting echo loop...", tun.if_name);
+    info!("TUN device {} opened.", tun.if_name);
 
-    let (rx_uring, mut _rx_handle) = mpsc::channel::<buffer_pool::PooledSlice>(64);
-    let (_tx_handle, tx_uring) = mpsc::channel::<bytes::Bytes>(64);
-    let opts = tun::TunControlOpts {
-        buffer_pool: 512,
-        tx_packet: tx_uring,
-        rx_packet: rx_uring,
+    let args: Vec<String> = std::env::args().collect();
+    let args = args.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
+    let alpn = b"zeroconf-p2p-vpn/vpn/1.0".to_vec();
+    let node_config = NodeExtraConfig {
+        n0_discovery: N0Discovery::NoN0,
+        use_dht: false,
+        use_mdns: true,
     };
-    if let Err(err) = tun.control(opts).await {
-        warn!("{:?}", err)
+    let (secret_key, _node, conn) = match args.as_slice() {
+        [_argv0, secret_file, peer_base32] => {
+            info!("Setting up a client node");
+            let secret_key = load_key_from_disk(secret_file)?;
+            info!("My public key: '{}'", secret_key.public().to_z32());
+            let peer_key = PublicKey::from_z32(peer_base32)
+                .context(format!("When decoding public key '{}'", peer_base32))?;
+            let node = TransportNode::new(secret_key.clone(), alpn, &node_config).await?;
+            let conn = node.connect(peer_key).await?;
+            (secret_key, node, conn)
+        }
+        [_argv0, secret_file] => {
+            info!("Setting up a server node");
+            let secret_key = load_key_from_disk(secret_file)?;
+            info!("My public key: '{}'", secret_key.public().to_z32());
+            let node = TransportNode::new(secret_key.clone(), alpn, &node_config).await?;
+            let mut conn_queue = node.listen_any();
+            (
+                secret_key,
+                node,
+                conn_queue
+                    .recv()
+                    .await
+                    .ok_or(anyhow::anyhow!("Didn't receive a listening connection"))?,
+            )
+        }
+        _ => panic!("Unexpected command line arguments: {:?}", args),
+    };
+    info!("Connected");
+
+    let (own_net, own_net_sig) = addr::generate_signed_ipnet(
+        &ipnet::IpNet::V6(addr::VPN_IPV6_DEFAULT_SUBNET0),
+        &secret_key,
+    );
+    tracing::warn!("My VPN address: {}", own_net.addr());
+    tun.add_if_addr(own_net.addr()).await?;
+
+    info!("Starting a communication loop");
+    let common_config = Arc::new(peer::CommonPeerConfig::new(
+        net_route_handle,
+        tun.if_index(),
+    ));
+    let (rx_uring, rx_handle) = mpsc::channel::<buffer_pool::PooledSlice>(64);
+    let (tx_handle, tx_uring) = mpsc::channel::<bytes::Bytes>(64);
+    let tun_loop = async {
+        let opts = tun::TunControlOpts {
+            buffer_pool: 512,
+            tx_packet: tx_uring,
+            rx_packet: rx_uring,
+        };
+        tun.control(opts).await
+    };
+
+    let advertise = proto::v1::Advertise {
+        own_addresses: vec![proto::v1::HostAddress {
+            peer_network: own_net.to_string(),
+            peer_network_signature: own_net_sig.to_bytes().to_vec(),
+        }],
+    };
+    let peer_config = peer::PeerConfig {
+        common: common_config.clone(),
+        conn,
+        advertise,
+    };
+    let p2p_loop = async move {
+        let mut peer = peer::Peer::new(peer_config);
+        peer.communicate(rx_handle, tx_handle).await
+    };
+    tokio::select! {
+        r = tun_loop => r,
+        r = p2p_loop => r,
     }
-    Ok(())
 }

@@ -12,6 +12,15 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 pub const VPN_IPV6_PREFIX: Ipv6Net =
     Ipv6Net::new_assert(Ipv6Addr::new(0xfdbd, 0xa6ce, 0x654d, 0, 0, 0, 0, 0), 48);
 
+/// A 1-bit sub-range of `VPN_IPV6_PREFIX`. That is, we allow subnets within 0x7fff.
+/// For now subnets 0x8000 and above are reserved for future use.
+pub const VPN_IPV6_DEFAULT_ALLOWED: Ipv6Net =
+    Ipv6Net::new_assert(VPN_IPV6_PREFIX.addr(), VPN_IPV6_PREFIX.prefix_len() + 1);
+
+/// A 1-bit sub-range of `VPN_IPV6_PREFIX`. That is, we allow subnets within 0x7fff.
+/// For now subnets 0x8000 and above are reserved for future use.
+pub const VPN_IPV6_DEFAULT_SUBNET0: Ipv6Net = Ipv6Net::new_assert(VPN_IPV6_PREFIX.addr(), 64);
+
 /// Generates an IP address within the given subnet based on a digital signature. The output
 /// `IpNet::addr()` contains the new address, with the same prefix length as the `net` argument.
 ///
