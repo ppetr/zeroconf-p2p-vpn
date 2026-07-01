@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use bytes::{BufMut, Bytes};
-use etherparse::{icmpv4, Icmpv4Type, Icmpv6Type, IpHeaders, Ipv4Header};
+use etherparse::{Icmpv4Type, Icmpv6Type, IpHeaders, Ipv4Header};
 use etherparse::{InternetSlice, PacketBuilder, SlicedPacket};
 use std::net::IpAddr;
 use std::ops::Deref;
@@ -35,18 +35,17 @@ pub fn inet_slice<'a>(slice: &'a (impl AsRef<[u8]> + ?Sized)) -> Result<Internet
         })
 }
 
-pub fn generate_mtu_too_large(
+pub fn generate_icmp(
     buffer: impl BufMut,
     original_packet: &[u8],
-    max_mtu: u16,
+    icmpv4_type: Icmpv4Type,
+    icmpv6_type: Icmpv6Type,
 ) -> Result<IpAddr> {
-    if original_packet.is_empty() {
-        anyhow::bail!("Empty packet");
-    }
+    anyhow::ensure!(!original_packet.is_empty(), "Empty packet");
 
     let icmp_payload = &original_packet[..std::cmp::min(original_packet.len(), 64)];
     match inet_slice(original_packet)? {
-        etherparse::InternetSlice::Ipv4(ip) => {
+        InternetSlice::Ipv4(ip) => {
             // An ICMPv4 response shouldn't prevert fragmentation to avoid further loops/bouncing
             // packets. Since this isn't supported by `PacketBuilder` directly, we need to build an
             // `Ipv4Header` from scratch.
@@ -58,20 +57,14 @@ pub fn generate_mtu_too_large(
                 ..Default::default()
             };
             PacketBuilder::ip(IpHeaders::Ipv4(ip_header, Default::default()))
-                .icmpv4(Icmpv4Type::DestinationUnreachable(
-                    icmpv4::DestUnreachableHeader::FragmentationNeeded {
-                        next_hop_mtu: max_mtu,
-                    },
-                ))
+                .icmpv4(icmpv4_type)
                 .write(&mut buffer.writer(), &icmp_payload)
                 .context("building ICMPv4 packet")?;
             Ok(IpAddr::V4(ip.header().source_addr()))
         }
-        etherparse::InternetSlice::Ipv6(ip) => {
+        InternetSlice::Ipv6(ip) => {
             PacketBuilder::ipv6(ip.header().source(), ip.header().destination(), 64)
-                .icmpv6(Icmpv6Type::PacketTooBig {
-                    mtu: max_mtu as u32,
-                })
+                .icmpv6(icmpv6_type)
                 .write(&mut buffer.writer(), &icmp_payload)
                 .context("building ICMPv6 packet")?;
             Ok(IpAddr::V6(ip.header().source_addr()))
@@ -84,7 +77,7 @@ pub fn generate_mtu_too_large(
 mod tests {
     use super::*;
     use bytes::BytesMut;
-    use std::net::{Ipv4Addr, Ipv6Addr};
+    use etherparse::{icmpv4, icmpv6};
     #[allow(unused_imports)]
     use std::str::FromStr;
 
@@ -109,7 +102,15 @@ mod tests {
         let mut buf = BytesMut::with_capacity(128);
 
         // Request MTU 1400 (0x0578)
-        let to_addr = generate_mtu_too_large(&mut buf, &MOCK_IPV4_PACKET, 1400).unwrap();
+        let to_addr = generate_icmp(
+            &mut buf,
+            &MOCK_IPV4_PACKET,
+            Icmpv4Type::DestinationUnreachable(
+                icmpv4::DestUnreachableHeader::FragmentationNeeded { next_hop_mtu: 1400 },
+            ),
+            Icmpv6Type::PacketTooBig { mtu: 1280 },
+        )
+        .unwrap();
 
         let expected = [
             // IPv4 Header
@@ -130,7 +131,15 @@ mod tests {
         let mut buf = BytesMut::with_capacity(128);
 
         // Request MTU 1280 (0x00000500)
-        let to_addr = generate_mtu_too_large(&mut buf, &MOCK_IPV6_PACKET, 1280).unwrap();
+        let to_addr = generate_icmp(
+            &mut buf,
+            &MOCK_IPV6_PACKET,
+            Icmpv4Type::DestinationUnreachable(
+                icmpv4::DestUnreachableHeader::FragmentationNeeded { next_hop_mtu: 1400 },
+            ),
+            Icmpv6Type::PacketTooBig { mtu: 1280 },
+        )
+        .unwrap();
 
         let expected = [
             // IPv6 Header (Src: 2001:db8::fe1, Dst: 2001:db8::fe2, NextHeader: 58 (ICMPv6), PayloadLen: 56)
@@ -140,6 +149,61 @@ mod tests {
             // ICMPv6 Packet Too Big (Type: 2, Code: 0, Checksum, MTU: 0x00000500)
             0x02, 0x00, 0x79, 0x62, 0x00, 0x00, 0x05, 0x00,
             // Original payload appended (48B)
+            0x60, 0x00, 0x00, 0x00, 0x00, 0x08, 0x11, 0x40, 0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0xe1, 0x20, 0x01, 0x0d, 0xb8,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0xe2, 0x0b, 0xb8,
+            0x0b, 0xb8, 0x00, 0x08, 0x00, 0x00,
+        ];
+
+        assert_eq!(buf.as_ref(), &expected[..]);
+        assert_eq!(to_addr, IpAddr::from_str("2001:db8::fe1").unwrap());
+    }
+
+    #[test]
+    fn test_ipv4_no_route() {
+        let mut buf = BytesMut::with_capacity(128);
+        let to_addr = generate_icmp(
+            &mut buf,
+            &MOCK_IPV4_PACKET,
+            Icmpv4Type::DestinationUnreachable(icmpv4::DestUnreachableHeader::NetworkUnknown),
+            Icmpv6Type::DestinationUnreachable(icmpv6::DestUnreachableCode::NoRoute),
+        )
+        .unwrap();
+
+        // Expected output layout: 20B IP header + 8B ICMP header + 28B original packet
+        let expected = [
+            // IPv4 Header (Src: 192.168.1.10, Dst: 8.8.8.8, Proto: 1 (ICMP), Len: 56)
+            0x45, 0x00, 0x00, 0x38, 0x00, 0x00, 0x00, 0x00, 0x40, 0x01, 0xa9, 0x03, 0xc0, 0xa8,
+            0x01, 0x0a, 0x08, 0x08, 0x08, 0x08,
+            // ICMPv4 Header (Type: 3 (Unreachable), Code: 6 (Network Unreachable), Checksum)
+            0x03, 0x06, 0x96, 0x63, 0x00, 0x00, 0x00, 0x00, // Original payload appended
+            0x45, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x40, 0x00, 0x40, 0x11, 0xb8, 0x2d, 0xc0, 0xa8,
+            0x01, 0x0a, 0x08, 0x08, 0x08, 0x08, 0x0b, 0xb8, 0x0b, 0xb8, 0x00, 0x08, 0x00, 0x00,
+        ];
+
+        assert_eq!(buf.as_ref(), &expected[..]);
+        assert_eq!(to_addr, IpAddr::from_str("192.168.1.10").unwrap());
+    }
+
+    #[test]
+    fn test_ipv6_no_route() {
+        let mut buf = BytesMut::with_capacity(128);
+        let to_addr = generate_icmp(
+            &mut buf,
+            &MOCK_IPV6_PACKET,
+            Icmpv4Type::DestinationUnreachable(icmpv4::DestUnreachableHeader::NetworkUnknown),
+            Icmpv6Type::DestinationUnreachable(icmpv6::DestUnreachableCode::NoRoute),
+        )
+        .unwrap();
+
+        // Expected output layout: 40B IPv6 header + 8B ICMPv6 header + 48B original packet
+        let expected = [
+            // IPv6 Header (Src: 2001:db8::fe1, Dst: 2001:db8::fe2, NextHeader: 58 (ICMPv6), PayloadLen: 56)
+            0x60, 0x00, 0x00, 0x00, 0x00, 0x38, 0x3a, 0x40, 0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0xe1, 0x20, 0x01, 0x0d, 0xb8,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0xe2,
+            // ICMPv6 Header (Type: 1 (Unreachable), Code: 0 (No Route to Dest))
+            0x01, 0x00, 0x7f, 0x62, 0x00, 0x00, 0x00, 0x00, // Original payload appended
             0x60, 0x00, 0x00, 0x00, 0x00, 0x08, 0x11, 0x40, 0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0xe1, 0x20, 0x01, 0x0d, 0xb8,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0xe2, 0x0b, 0xb8,

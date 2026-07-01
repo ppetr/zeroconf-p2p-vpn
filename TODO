@@ -1,0 +1,10 @@
+Peer
+- connect task
+- accept task
+- connection
+  - enabled
+- states:
+  - Connecting
+  - Handshake Rx/Tx
+  - Connected
+    - conn. enabled (AtomicBool)
