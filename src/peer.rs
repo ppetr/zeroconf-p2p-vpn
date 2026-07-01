@@ -10,11 +10,11 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 use crate::addr;
-pub use crate::buffer_pool::PooledSlice;
 use crate::proto;
 use crate::proto::v1::control;
 use crate::proto::v1::{Control, Disconnect, Status};
 use crate::route;
+use crate::tun::packet as tun;
 
 pub struct CommonPeerConfig {
     pub allowed_networks: Vec<IpNet>,
@@ -56,8 +56,8 @@ impl Peer {
 
     pub async fn communicate(
         &mut self,
-        mut rx_packet: mpsc::Receiver<PooledSlice>,
-        tx_packet: mpsc::Sender<Bytes>,
+        mut rx_packet: mpsc::Receiver<tun::RxPacket>,
+        tx_packet: mpsc::Sender<tun::TxPacket>,
     ) -> Result<()> {
         let routes = self.handshake().await?;
         // Main loop. -------
@@ -77,14 +77,14 @@ impl Peer {
                 let _ = self
                     .config
                     .conn
-                    .send_datagram_wait(Bytes::from_owner(packet))
+                    .send_datagram_wait(Bytes::from_owner(packet.data))
                     .await;
             }
         };
         let recv = async {
             Ok::<(), Error>(loop {
                 let bytes = self.config.conn.read_datagram().await?;
-                tx_packet.send(bytes).await?;
+                tx_packet.send(tun::TxPacket { data: bytes }).await?;
             })
         };
         tokio::select! {

@@ -1,16 +1,18 @@
 use anyhow::{Context, Result};
-use bytes::Bytes;
 use std::net::IpAddr;
 use tokio::sync::mpsc;
 use tun_rs::{AsyncDevice, DeviceBuilder};
 
-pub use crate::buffer_pool::{write_frame, BufferPool, PooledSlice};
+pub mod packet;
+pub use packet::*;
+
+use crate::buffer_pool::{write_frame, BufferPool};
 use crate::osal;
 
 pub struct TunControlOpts {
     pub buffer_pool: usize,
-    pub tx_packet: mpsc::Receiver<Bytes>,
-    pub rx_packet: mpsc::Sender<PooledSlice>,
+    pub tx_packet: mpsc::Receiver<TxPacket>,
+    pub rx_packet: mpsc::Sender<RxPacket>,
 }
 
 pub struct Tun {
@@ -68,7 +70,7 @@ impl Tun {
                 };
                 tracing::info!("Received packet of size {}", buf.len());
                 if buf.len() > 0 {
-                    rx_packet.send(buf.into()).await?;
+                    rx_packet.send(RxPacket { data: buf.into() }).await?;
                 }
             })
         };
@@ -77,7 +79,7 @@ impl Tun {
         let tx_task = async move {
             Ok::<(), anyhow::Error>(loop {
                 let bytes = tx_packet.recv().await.context("Channel dropped")?;
-                match write_frame(&bytes, dev).await {
+                match write_frame(&bytes.data, dev).await {
                     Err(err) if osal::is_tun_transient(&err) => continue,
                     r => r?,
                 };

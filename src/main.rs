@@ -1,5 +1,6 @@
 use anyhow::Context;
 use iroh::PublicKey;
+use secure_p2p_transport::{load_key_from_disk, N0Discovery, NodeExtraConfig, TransportNode};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{info, level_filters::LevelFilter};
@@ -12,8 +13,6 @@ mod peer;
 mod proto;
 mod route;
 mod tun;
-
-use secure_p2p_transport::{load_key_from_disk, N0Discovery, NodeExtraConfig, TransportNode};
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
@@ -83,8 +82,8 @@ async fn main() -> Result<(), anyhow::Error> {
         net_route_handle,
         tun.if_index(),
     ));
-    let (rx_uring, rx_handle) = mpsc::channel::<buffer_pool::PooledSlice>(64);
-    let (tx_handle, tx_uring) = mpsc::channel::<bytes::Bytes>(64);
+    let (rx_uring, rx_handle) = mpsc::channel::<tun::RxPacket>(64);
+    let (tx_handle, tx_uring) = mpsc::channel::<tun::TxPacket>(64);
     let tun_loop = async {
         let opts = tun::TunControlOpts {
             buffer_pool: 512,
