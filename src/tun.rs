@@ -68,7 +68,7 @@ impl Tun {
                     Err(err) if osal::is_tun_transient(&err) => continue,
                     r => r?,
                 };
-                tracing::info!("Received packet of size {}", buf.len());
+                tracing::debug!("Received packet of size {}", buf.len());
                 if buf.len() > 0 {
                     rx_packet.send(RxPacket { data: buf.into() }).await?;
                 }
@@ -79,6 +79,7 @@ impl Tun {
         let tx_task = async move {
             Ok::<(), anyhow::Error>(loop {
                 let bytes = tx_packet.recv().await.context("Channel dropped")?;
+                tracing::debug!("Sending packet of size {}", (&bytes).len());
                 match write_frame(&bytes.data, dev).await {
                     Err(err) if osal::is_tun_transient(&err) => continue,
                     r => r?,

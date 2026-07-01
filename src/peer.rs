@@ -23,15 +23,21 @@ pub struct CommonPeerConfig {
     pub route_table: Arc<net_route::Handle>,
     /// `if_index`: The system index of the TUN interface for adding/removing routes.
     tun_if_index: u32,
+    own_net: IpNet,
 }
 
 impl CommonPeerConfig {
-    pub fn new(route_table: Arc<net_route::Handle>, tun_if_index: u32) -> CommonPeerConfig {
+    pub fn new(
+        route_table: Arc<net_route::Handle>,
+        tun_if_index: u32,
+        own_net: IpNet,
+    ) -> CommonPeerConfig {
         CommonPeerConfig {
             allowed_networks: vec![IpNet::V6(addr::VPN_IPV6_DEFAULT_ALLOWED)],
             handshake_timeout: Duration::from_mins(1),
             route_table: route_table,
             tun_if_index,
+            own_net,
         }
     }
 }
@@ -68,12 +74,36 @@ impl Peer {
         );
         let control = self.recv_control_loop(routes);
         let send = async {
+            let icmp_gateway = tun::IcmpGateway::from_addr(self.config.common.own_net.addr());
+
             loop {
                 let Some(packet) = rx_packet.recv().await else {
                     break;
                 };
                 // TODO: Check networks etc.
-                // TODO: Check max_datagram_size and push back if larger.
+                if let Some(mtu) = self.config.conn.max_datagram_size() {
+                    if (&packet).len() > mtu {
+                        let mtu = std::cmp::min(mtu, 1500) as u16;
+                        let mut buf = bytes::BytesMut::with_capacity(128);
+                        match icmp_gateway.generate_reply(
+                            &mut buf,
+                            &packet,
+                            tun::IcmpType::packet_too_big(mtu),
+                        ) {
+                            Ok(_) => {
+                                let buf = buf.freeze();
+                                tracing::info!(packet = ?buf, "Sending ICMP packet to reduce MTU to {}", mtu);
+                                let _ = tx_packet.send(tun::TxPacket { data: buf }).await;
+                            }
+                            // TODO: Deal with Result
+                            Err(e) => tracing::warn!(
+                                error = e.to_string(),
+                                key = self.public_key().to_z32()
+                            ),
+                        }
+                        continue;
+                    }
+                }
                 // TODO: Deal with Result
                 let _ = self
                     .config

@@ -108,10 +108,9 @@ unsafe impl BufMut for PooledBuffer {
 pub async fn write_frame(buffer: &[u8], dev: &AsyncDevice) -> std::io::Result<()> {
     let written_len = dev.send(buffer).await?;
     if written_len != buffer.len() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Buffer length {} != written {}", buffer.len(), written_len),
-        ));
+        let msg = format!("Buffer length {} != written {}", buffer.len(), written_len);
+        tracing::warn!(msg);
+        return Err(std::io::Error::new(std::io::ErrorKind::Other, msg));
     }
     Ok(())
 }

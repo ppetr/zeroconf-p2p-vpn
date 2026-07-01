@@ -2,10 +2,13 @@
 #FROM scratch
 FROM debian:stable-slim AS base
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    ethtool \
     iproute2 \
     iputils-ping \
     net-tools \
     netcat-openbsd \
+    pv \
+    tcpdump \
     python3 \
     curl \
     && rm -rf /var/lib/apt/lists/*

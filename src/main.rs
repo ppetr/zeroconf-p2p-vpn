@@ -81,6 +81,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let common_config = Arc::new(peer::CommonPeerConfig::new(
         net_route_handle,
         tun.if_index(),
+        own_net,
     ));
     let (rx_uring, rx_handle) = mpsc::channel::<tun::RxPacket>(64);
     let (tx_handle, tx_uring) = mpsc::channel::<tun::TxPacket>(64);
