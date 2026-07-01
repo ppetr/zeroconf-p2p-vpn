@@ -3,6 +3,7 @@ use bytes::Bytes;
 use ipnet::IpNet;
 use iroh::endpoint::{Connection, VarInt};
 use iroh::{PublicKey, Signature};
+use secure_p2p_transport::wait_for_direct;
 use std::sync::Arc;
 use std::time::Duration;
 use thin_status::{ErrorCode, ThinStatus};
@@ -97,6 +98,7 @@ impl Peer {
 
     /// Returns the set of routes to be passed to the `recv_control_loop`.
     async fn handshake(&self) -> Result<Vec<route::ScopedRoute>> {
+        wait_for_direct(&self.config.conn).await?;
         let handshake = async {
             let send = self.send_advertise();
             let mut routes = Vec::new();
