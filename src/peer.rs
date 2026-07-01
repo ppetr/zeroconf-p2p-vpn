@@ -5,6 +5,7 @@ use iroh::endpoint::{Connection, VarInt};
 use iroh::PublicKey;
 use metrics::*;
 use secure_p2p_transport::wait_for_direct;
+use std::fmt::Write;
 use std::sync::Arc;
 use std::time::Duration;
 use thin_status::{ErrorCode, ThinStatus};
@@ -17,8 +18,8 @@ mod validate_addr;
 use crate::addr;
 use crate::error::ExtractedErrorCode;
 use crate::proto;
-use crate::proto::v1::control;
-use crate::proto::v1::{Control, Disconnect, Status};
+use crate::proto::v1::control_request;
+use crate::proto::v1::ControlRequest;
 use crate::route;
 use crate::tun::packet as tun;
 
@@ -171,18 +172,20 @@ impl Peer {
 
     /// Sends an Advertise handshake.
     async fn send_advertise(&self) -> Result<()> {
-        let cmd = control::Command::Advertise(self.config.advertise.clone());
+        let cmd = control_request::Command::Advertise(self.config.advertise.clone());
         tracing::debug_span!(
             "send_advertise",
             peer = self.public_key().to_z32(),
             "Sending Command::Advertise {:?}",
             cmd
         );
-        let control = Control {
+        let control = ControlRequest {
             command: Some(cmd),
             ..Default::default()
         };
-        proto::write_control(&self.config.conn, &control).await
+        Ok(proto::control_to_status(
+            proto::write_control(&self.config.conn, &control).await?,
+        )?)
     }
 
     /// Waits for a single control message and processes it.
@@ -192,28 +195,26 @@ impl Peer {
         tracing::debug_span!(
             "recv_control",
             peer = self.public_key().to_z32(),
-            "Receiving control command"
+            "Receiving ControlRequest"
         );
-        counter!(description: "Received v1::Control messages",
+        counter!(description: "Received v1::ControlRequest messages",
                  "p2p_vpn_peer_recv_control_message")
         .increment(1);
-        let control = proto::read_control(&self.config.conn).await;
-        // Ignore malformed messages.
-        let control = match control {
-            Err(e) => {
-                tracing::info!(
-                    error = ?e,
-                    "Received a malformed message from the peer, ignoring"
-                );
-                counter!(description: "Received malformed v1::Control messages",
-                    "p2p_vpn_peer_recv_control_message_errors", ExtractedErrorCode::from_anyhow(&e))
-                .increment(1);
-                return Ok(());
-            }
-            Ok(c) => c,
-        };
-        match control.command {
-            Some(control::Command::Advertise(a)) => {
+        Ok(proto::read_control(&self.config.conn, async |r| {
+            self.handle_control_request(&r, routes).await
+        })
+        .await?)
+    }
+
+    /// Returns an error iff the connection should be disconnected.
+    async fn handle_control_request(
+        &self,
+        request: &ControlRequest,
+        routes: &mut Vec<route::ScopedRoute>,
+    ) -> Result<(), ThinStatus> {
+        let mut addr_errors = Vec::new();
+        match &request.command {
+            Some(control_request::Command::Advertise(a)) => {
                 let (addrs, errors) = validate_addr::validate_addresses(
                     &self.config.common.allowed_networks,
                     &a,
@@ -221,6 +222,7 @@ impl Peer {
                 );
                 if !errors.is_empty() {
                     tracing::info!(peer = self.public_key().to_z32(), errors = ?errors, "Errors parsing peer addresses");
+                    addr_errors = errors;
                 }
                 let common = &self.config.common;
                 routes.clear();
@@ -231,19 +233,14 @@ impl Peer {
                     routes.push(scoped);
                 }
             }
-            Some(control::Command::Disconnect(_)) => {
-                self.config
-                    .conn
-                    .close(VarInt::from_u32(0), b"Requested disconnect");
-                anyhow::bail!("Peer requested Disconnect: {:?}", control);
-            }
             None => (),
         };
         if routes.is_empty() {
-            let status = ThinStatus::builder(ErrorCode::FailedPrecondition)
-                .message("No available routes to the peer")
-                .build();
-            return self.send_disconnect(status).await;
+            let mut status = ThinStatus::builder(ErrorCode::FailedPrecondition);
+            let _ = write!(status, "No available routes to the peer; {:?}", addr_errors);
+            let status = status.build();
+            self.send_disconnect(&status);
+            return Err(status);
         }
         Ok(())
     }
@@ -254,23 +251,10 @@ impl Peer {
         }
     }
 
-    async fn send_disconnect(&self, status: ThinStatus) -> Result<()> {
-        let control = Control {
-            status: Some(Status {
-                code: status.code_raw().get(),
-                message: Some(status.message().to_string()),
-            }),
-            command: Some(control::Command::Disconnect(Disconnect {})),
-            ..Default::default()
-        };
-        let written = proto::write_control(&self.config.conn, &control).await;
-        let Ok(_) = written else {
-            let msg = format!("Unable to send a Disconnect message; {}", status);
-            self.config
-                .conn
-                .close(VarInt::from_u32(1), (&msg).as_bytes());
-            return written.context(msg);
-        };
-        Err(status.into())
+    fn send_disconnect(&self, status: &ThinStatus) {
+        self.config.conn.close(
+            VarInt::from_u32(i32::from(status.code_raw()) as u32),
+            status.message().as_bytes(),
+        )
     }
 }

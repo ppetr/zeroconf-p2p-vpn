@@ -6,7 +6,8 @@ package p2p_vpn.control.v1;
 // The fields and their numbers match directly
 // https://github.com/googleapis/googleapis/blob/master/google/rpc/status.proto
 message Status {
-  // The status code, which should be an enum value of thin_status::ErrorCode.
+  // The status code, which should be an enum value of thin_status::ErrorCode
+  // (which is just a gRPC Status code).
   int32 code = 1;
   // An optional text description of the error.
   optional string message = 2;
@@ -16,17 +17,20 @@ message Status {
 // Once a QUIC connection is established, both parties are required to send a
 // Advertise control message, otherwise they can't route traffic to each other.
 //
-// Afterwards any party can transmit an asynchronous controll message any time.
-message Control {
-  // QUIC stream ID when replying to a previous message.
-  int64 reply_to = 1;
-  optional Status status = 2;
+// Afterwards any party can transmit an asynchronous control message any time,
+// for example to update routes.
+message ControlRequest {
   oneof command {
-    Advertise advertise = 3;
-    // Request graceful disconnect, which should be performed by the remote
-    // peer. This allows the remote peer to receive any explaiing `status`.
-    Disconnect disconnect = 4;
+    Advertise advertise = 2;
   }
+}
+
+message ControlResponse {
+  // This status represents a recoverable error. A non-recoverable error is
+  // instead translated to closing the QUIC  connection, with the closing
+  // `error_code` directly copied from a `ThinStatus::code_raw()` (which is
+  // just a gRPC Status code).
+  Status status = 1;
 }
 
 message HostAddress {
@@ -41,9 +45,7 @@ message HostAddress {
 
 // Advertises at which addresses the sender can be reached. Depending on the
 // peer's configuration it might accept only some or none of them (in the
-// latter case it initiates `Disconnect`).
+// latter case it triggers a QUIC `close` frame).
 message Advertise {
   repeated HostAddress own_addresses = 2;
 }
-
-message Disconnect {}
