@@ -91,9 +91,9 @@ impl Peer {
                             tun::IcmpType::packet_too_big(mtu),
                         ) {
                             Ok(_) => {
-                                let buf = buf.freeze();
-                                tracing::info!(packet = ?buf, "Sending ICMP packet to reduce MTU to {}", mtu);
-                                let _ = tx_packet.send(tun::TxPacket { data: buf }).await;
+                                let buf = tun::TxPacket { data: buf.freeze() };
+                                tracing::debug!(packet = ?buf, "Sending ICMP packet to reduce MTU to {}", mtu);
+                                let _ = tx_packet.send(buf).await;
                             }
                             // TODO: Deal with Result
                             Err(e) => tracing::warn!(

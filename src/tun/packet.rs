@@ -1,11 +1,20 @@
 use anyhow::{anyhow, Context, Result};
 use bytes::{BufMut, Bytes};
 use etherparse::{icmpv4, icmpv6, Icmpv4Type, Icmpv6Type, IpHeaders, Ipv4Header};
-use etherparse::{InternetSlice, PacketBuilder, SlicedPacket};
+use etherparse::{InternetSlice, PacketBuilder, PacketHeaders, SlicedPacket};
+use pretty_hex::PrettyHex;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ops::Deref;
 
 pub use crate::buffer_pool::PooledSlice;
+
+fn format_packet(packet: &[u8], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let mut builder = f.debug_struct("TxPacket");
+    if let Ok(sliced) = PacketHeaders::from_ip_slice(packet) {
+        builder.field("sliced", &sliced);
+    }
+    builder.field("payload", &packet.hex_dump()).finish()
+}
 
 pub struct TxPacket {
     pub data: Bytes,
@@ -19,6 +28,12 @@ impl Deref for TxPacket {
     }
 }
 
+impl std::fmt::Debug for TxPacket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        format_packet(&self, f)
+    }
+}
+
 pub struct RxPacket {
     pub data: PooledSlice,
     // IP address of the incoming packet will be added here.
@@ -29,6 +44,12 @@ impl Deref for RxPacket {
 
     fn deref(&self) -> &Self::Target {
         &self.data
+    }
+}
+
+impl std::fmt::Debug for RxPacket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        format_packet(&self, f)
     }
 }
 
