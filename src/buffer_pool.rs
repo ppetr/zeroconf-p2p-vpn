@@ -38,6 +38,10 @@ impl BufferPool {
             reclaim: self.reclaim.downgrade(),
         }
     }
+
+    pub fn capacity(&self) -> usize {
+        self.pool.capacity()
+    }
 }
 
 /// Holds a buffer together with a reference that'll return it back to the respective

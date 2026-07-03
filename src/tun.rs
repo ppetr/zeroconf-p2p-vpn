@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use metrics::*;
 use std::net::IpAddr;
 use tokio::sync::mpsc;
 use tun_rs::{AsyncDevice, DeviceBuilder};
@@ -7,6 +8,7 @@ pub mod packet;
 pub use packet::*;
 
 use crate::buffer_pool::{write_frame, BufferPool};
+use crate::error::ExtractedErrorCode;
 use crate::osal;
 
 pub struct TunControlOpts {
@@ -61,14 +63,31 @@ impl Tun {
         let mut buffer_pool = BufferPool::new(opts.buffer_pool, 2048);
         let dev = &self.device;
 
+        let if_name = &self.if_name;
         let rx_packet = opts.rx_packet;
         let rx_task = async move {
             Ok::<(), anyhow::Error>(loop {
+                gauge!(description: "The capacity of the internal buffer pool; 0 means starvation",
+                    "p2p_vpn_tun_read_buffer_pool_capacity",
+                    "if_name" => if_name.clone(),
+                )
+                .set(buffer_pool.capacity() as u32);
                 let buf = match buffer_pool.pop().await.read_frame(dev).await {
-                    Err(err) if osal::is_tun_transient(&err) => continue,
+                    Err(err) if osal::is_tun_transient(&err) => {
+                        let mut labels = ExtractedErrorCode::from_io(&err).into_labels();
+                        labels.push(metrics::Label::new("if_name", if_name.clone()));
+                        counter!(description: "Read errors during the TUN read loop that we consider as transient (retryable)",
+                                 "p2p_vpn_tun_read_transient_errors", labels).increment(1);
+                        continue;
+                    }
                     r => r?,
                 };
-                tracing::debug!("Received packet of size {}", buf.len());
+                histogram!(description: "Size of packets received from a TUN interface",
+                    unit: metrics::Unit::Bytes,
+                    "p2p_vpn_tun_read_packets_size",
+                    "if_name" => if_name.clone(),
+                )
+                .record(buf.len() as u32);
                 if buf.len() > 0 {
                     rx_packet.send(RxPacket { data: buf.into() }).await?;
                 }
@@ -79,9 +98,19 @@ impl Tun {
         let tx_task = async move {
             Ok::<(), anyhow::Error>(loop {
                 let bytes = tx_packet.recv().await.context("Channel dropped")?;
-                tracing::debug!("Sending packet of size {}", (&bytes).len());
+                histogram!(description: "Size of packets sent to a TUN interface",
+                    unit: metrics::Unit::Bytes,
+                    "p2p_vpn_tun_send_packets_size",
+                    "if_name" => if_name.clone(),
+                )
+                .record(bytes.len() as u32);
                 match write_frame(&bytes.data, dev).await {
-                    Err(err) if osal::is_tun_transient(&err) => continue,
+                    Err(err) if osal::is_tun_transient(&err) => {
+                        let mut labels = ExtractedErrorCode::from_io(&err).into_labels();
+                        labels.push(metrics::Label::new("if_name", if_name.clone()));
+                        counter!(description: "Send errors during the TUN read loop that we consider as transient (retryable)",
+                                 "p2p_vpn_tun_send_transient_errors", labels).increment(1);
+                    }
                     r => r?,
                 };
             })

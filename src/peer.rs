@@ -76,10 +76,7 @@ impl Peer {
         let send = async {
             let icmp_gateway = tun::IcmpGateway::from_addr(self.config.common.own_net.addr());
 
-            loop {
-                let Some(packet) = rx_packet.recv().await else {
-                    break;
-                };
+            while let Some(packet) = rx_packet.recv().await {
                 // TODO: Check networks etc.
                 if let Some(mtu) = self.config.conn.max_datagram_size() {
                     if (&packet).len() > mtu {
