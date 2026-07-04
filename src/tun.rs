@@ -60,18 +60,31 @@ impl Tun {
     }
 
     pub async fn control(self, opts: TunControlOpts) -> Result<()> {
-        let mut buffer_pool = BufferPool::new(opts.buffer_pool, 2048);
+        let pool_gauge = gauge!(
+            description: "The capacity of the internal buffer pool; 0 means starvation",
+            "p2p_vpn_tun_read_buffer_pool_capacity",
+            "if_name" => self.if_name.clone(),
+        );
+        let recv_packets_histogram = histogram!(
+            description: "Size of packets received from a TUN interface",
+            unit: metrics::Unit::Bytes,
+            "p2p_vpn_tun_recv_packets_size",
+            "if_name" => self.if_name.clone(),
+        );
+        let send_packets_histogram = histogram!(
+            description: "Size of packets sent to a TUN interface",
+            unit: metrics::Unit::Bytes,
+            "p2p_vpn_tun_send_packets_size",
+            "if_name" => self.if_name.clone(),
+        );
+
+        let mut buffer_pool = BufferPool::new(opts.buffer_pool, 2048, pool_gauge);
         let dev = &self.device;
 
         let if_name = &self.if_name;
         let rx_packet = opts.rx_packet;
         let rx_task = async move {
             Ok::<(), anyhow::Error>(loop {
-                gauge!(description: "The capacity of the internal buffer pool; 0 means starvation",
-                    "p2p_vpn_tun_read_buffer_pool_capacity",
-                    "if_name" => if_name.clone(),
-                )
-                .set(buffer_pool.capacity() as u32);
                 let buf = match buffer_pool.pop().await.read_frame(dev).await {
                     Err(err) if osal::is_tun_transient(&err) => {
                         let mut labels = ExtractedErrorCode::from_io(&err).into_labels();
@@ -82,12 +95,7 @@ impl Tun {
                     }
                     r => r?,
                 };
-                histogram!(description: "Size of packets received from a TUN interface",
-                    unit: metrics::Unit::Bytes,
-                    "p2p_vpn_tun_read_packets_size",
-                    "if_name" => if_name.clone(),
-                )
-                .record(buf.len() as u32);
+                recv_packets_histogram.record(buf.len() as u32);
                 if buf.len() > 0 {
                     rx_packet.send(RxPacket { data: buf.into() }).await?;
                 }
@@ -98,12 +106,7 @@ impl Tun {
         let tx_task = async move {
             Ok::<(), anyhow::Error>(loop {
                 let bytes = tx_packet.recv().await.context("Channel dropped")?;
-                histogram!(description: "Size of packets sent to a TUN interface",
-                    unit: metrics::Unit::Bytes,
-                    "p2p_vpn_tun_send_packets_size",
-                    "if_name" => if_name.clone(),
-                )
-                .record(bytes.len() as u32);
+                send_packets_histogram.record(bytes.len() as u32);
                 match write_frame(&bytes.data, dev).await {
                     Err(err) if osal::is_tun_transient(&err) => {
                         let mut labels = ExtractedErrorCode::from_io(&err).into_labels();

@@ -8,11 +8,13 @@ use tun_rs::AsyncDevice;
 pub struct BufferPool {
     pool: mpsc::Receiver<Box<[u8]>>,
     reclaim: mpsc::Sender<Box<[u8]>>,
+    capacity_gauge: metrics::Gauge,
 }
 
 impl BufferPool {
-    pub fn new(count: usize, buf_size: usize) -> BufferPool {
+    pub fn new(count: usize, buf_size: usize, capacity_gauge: metrics::Gauge) -> BufferPool {
         let (tx, rx) = mpsc::channel(count);
+        capacity_gauge.set(count as u32);
         for _ in 0..count {
             let mut v = Vec::with_capacity(buf_size);
             v.resize(buf_size, 0);
@@ -22,13 +24,14 @@ impl BufferPool {
         BufferPool {
             pool: rx,
             reclaim: tx,
+            capacity_gauge,
         }
     }
 
     /// Gets an empty buffer from the pool. If no buffer is available, blocks until one is
     /// reclaimed.
     pub async fn pop(&mut self) -> PooledBuffer {
-        PooledBuffer {
+        let result = PooledBuffer {
             buffer: self
                 .pool
                 .recv()
@@ -36,12 +39,17 @@ impl BufferPool {
                 .expect("`pool` can't be closed since it's held by `self`"),
             filled_len: 0,
             reclaim: self.reclaim.downgrade(),
-        }
+            capacity_gauge: self.capacity_gauge.clone(),
+        };
+        metrics::gauge!("p2p_vpn_buffer_pool_active").increment(1);
+        report_available(&self.reclaim, &self.capacity_gauge);
+        result
     }
+}
 
-    pub fn capacity(&self) -> usize {
-        self.pool.capacity()
-    }
+fn report_available(sender: &mpsc::Sender<Box<[u8]>>,
+                    capacity_gauge: &metrics::Gauge) {
+    capacity_gauge.set((sender.max_capacity() - sender.capacity()) as u32);
 }
 
 /// Holds a buffer together with a reference that'll return it back to the respective
@@ -51,6 +59,7 @@ pub struct PooledBuffer {
     buffer: Box<[u8]>,
     filled_len: usize,
     reclaim: mpsc::WeakSender<Box<[u8]>>,
+    capacity_gauge: metrics::Gauge,
 }
 
 impl PooledBuffer {
@@ -77,6 +86,8 @@ impl PooledBuffer {
 impl Drop for PooledBuffer {
     fn drop(&mut self) {
         if let Some(sender) = self.reclaim.upgrade() {
+            metrics::gauge!("p2p_vpn_buffer_pool_active").decrement(1);
+            report_available(&sender, &self.capacity_gauge);
             match sender.try_send(std::mem::take(&mut self.buffer)) {
                 Ok(()) => (),
                 Err(mpsc::error::TrySendError::Closed(_)) => (),

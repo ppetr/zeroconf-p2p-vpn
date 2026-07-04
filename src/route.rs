@@ -1,7 +1,10 @@
 use futures_util::FutureExt;
+use metrics::IntoLabels;
 use std::net::IpAddr;
 use std::sync::Arc;
 use tracing::{info_span, Instrument};
+
+use crate::error::ExtractedErrorCode;
 
 /// An RAII guard that keeps an IP route active until it is dropped.
 ///
@@ -36,6 +39,9 @@ impl ScopedRoute {
 
         let route = this.route_entry();
         this.handle.add(&route).await?;
+        metrics::gauge!("p2p_vpn_route_scoped_route_active",
+            "ip" => if dest_ip.is_ipv6() { "v6" } else { "v4" })
+        .increment(1);
 
         Ok(this)
     }
@@ -60,17 +66,22 @@ impl Drop for ScopedRoute {
 
         tokio::spawn(
             async move {
+                metrics::gauge!("p2p_vpn_route_scoped_route_active",
+                    "ip" => if dest_ip.is_ipv6() { "v6" } else { "v4" })
+                .decrement(1);
                 handle.delete(&route).await
             }
             .instrument(span)
-            .map(move |result| {
-                if result.is_err() {
-                    metrics::counter!(
-                        "scoped_route_cleanup_errors_total",
-                        "ip_version" => match dest_ip { IpAddr::V4(_) => "v4", IpAddr::V6(_) => "v6" }
-                    )
-                    .increment(1);
+            .map(move |result| match result {
+                Err(err) => {
+                    let mut labels = ExtractedErrorCode::from_io(&err).into_labels();
+                    labels.push(metrics::Label::new(
+                        "ip",
+                        if dest_ip.is_ipv6() { "v6" } else { "v4" },
+                    ));
+                    metrics::counter!("scoped_route_cleanup_errors_total", labels).increment(1);
                 }
+                _ => {}
             }),
         );
     }

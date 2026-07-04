@@ -3,6 +3,7 @@ use bytes::Bytes;
 use ipnet::IpNet;
 use iroh::endpoint::{Connection, VarInt};
 use iroh::{PublicKey, Signature};
+use metrics::*;
 use secure_p2p_transport::wait_for_direct;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,6 +12,7 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 use crate::addr;
+use crate::error::ExtractedErrorCode;
 use crate::proto;
 use crate::proto::v1::control;
 use crate::proto::v1::{Control, Disconnect, Status};
@@ -72,6 +74,7 @@ impl Peer {
             peer = self.public_key().to_z32(),
             "Handshake successfully completed"
         );
+        counter!(description: "Successful handshakes", "p2p_vpn_peer_handshakes").increment(1);
         let control = self.recv_control_loop(routes);
         let send = async {
             let icmp_gateway = tun::IcmpGateway::from_addr(self.config.common.own_net.addr());
@@ -80,23 +83,29 @@ impl Peer {
                 // TODO: Check networks etc.
                 if let Some(mtu) = self.config.conn.max_datagram_size() {
                     if (&packet).len() > mtu {
-                        let mtu = std::cmp::min(mtu, 1500) as u16;
+                        let mtu = std::cmp::min(mtu, u16::MAX as usize) as u16;
                         let mut buf = bytes::BytesMut::with_capacity(128);
                         match icmp_gateway.generate_reply(
                             &mut buf,
                             &packet,
                             tun::IcmpType::packet_too_big(mtu),
                         ) {
-                            Ok(_) => {
+                            Ok(addr) => {
                                 let buf = tun::TxPacket { data: buf.freeze() };
                                 tracing::debug!(packet = ?buf, "Sending ICMP packet to reduce MTU to {}", mtu);
+                                histogram!(description: "ICMP packets to reduce MTU",
+                                    unit: metrics::Unit::Bytes,
+                                    "p2p_vpn_peer_icmp_mtu",
+                                    "ip" => if addr.is_ipv6() { "v6" } else { "v4" },
+                                )
+                                .record(mtu);
                                 let _ = tx_packet.send(buf).await;
                             }
-                            // TODO: Deal with Result
-                            Err(e) => tracing::warn!(
-                                error = e.to_string(),
-                                key = self.public_key().to_z32()
-                            ),
+                            Err(err) => {
+                                tracing::warn!(error = ?err, key = self.public_key().to_z32());
+                                histogram!(description: "Errors when generating ICMP packets to reduce MTU",
+                                    "p2p_vpn_peer_icmp_mtu_errors", ExtractedErrorCode::from_anyhow(&err)).record(mtu);
+                            }
                         }
                         continue;
                     }
@@ -167,6 +176,9 @@ impl Peer {
             peer = self.public_key().to_z32(),
             "Receiving control command"
         );
+        counter!(description: "Received v1::Control messages",
+                 "p2p_vpn_peer_recv_control_message")
+        .increment(1);
         let control = proto::read_control(&self.config.conn).await;
         // Ignore malformed messages.
         let control = match control {
@@ -175,6 +187,9 @@ impl Peer {
                     error = ?e,
                     "Received a malformed message from the peer, ignoring"
                 );
+                counter!(description: "Received malformed v1::Control messages",
+                    "p2p_vpn_peer_recv_control_message_errors", ExtractedErrorCode::from_anyhow(&e))
+                .increment(1);
                 return Ok(());
             }
             Ok(c) => c,
@@ -260,6 +275,10 @@ pub fn validate_addresses(
             Err(e) => {
                 let e = e.context(format!("when validating network '{}'", host.peer_network));
                 tracing::info!(error = e.to_string(), key = key.to_z32());
+                counter!(description: "Validating peer addresses",
+                         "p2p_vpn_peer_validate_addr_errors",
+                         ExtractedErrorCode::from_anyhow(&e))
+                .increment(1);
                 errors.push(e);
             }
         }

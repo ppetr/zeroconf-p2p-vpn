@@ -1,6 +1,5 @@
 use anyhow;
 use metrics;
-use metrics::IntoLabels;
 use std::io::ErrorKind;
 use thin_status::*;
 
@@ -43,23 +42,21 @@ impl metrics::IntoLabels for ExtractedErrorCode {
 /// Creates two labels: "ERROR_CODE" and "ERROR_KIND".
 impl From<&ExtractedErrorCode> for Vec<metrics::Label> {
     fn from(e: &ExtractedErrorCode) -> Vec<metrics::Label> {
-        let mut labels = Vec::new();
-        labels.push(metrics::Label::from_static_parts(
-            "ERROR_CODE",
-            e.code.into(),
-        ));
-        labels.push(metrics::Label::from_static_parts(
-            "ERROR_KIND",
-            error_kind_str(e.kind),
-        ));
-        labels
+        labels_static(e.code.into(), error_kind_str(e.kind))
     }
 }
 
 impl From<ExtractedErrorCode> for Vec<metrics::Label> {
     fn from(e: ExtractedErrorCode) -> Vec<metrics::Label> {
-        e.into_labels()
+        (&e).into()
     }
+}
+
+fn labels_static(code: &'static str, kind: &'static str) -> Vec<metrics::Label> {
+    let mut labels = Vec::new();
+    labels.push(metrics::Label::from_static_parts("ERROR_CODE", code));
+    labels.push(metrics::Label::from_static_parts("ERROR_KIND", kind));
+    labels
 }
 
 fn error_kind_str(kind: ErrorKind) -> &'static str {
