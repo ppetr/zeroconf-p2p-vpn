@@ -1,6 +1,8 @@
 use anyhow::Context;
 use iroh::PublicKey;
 use secure_p2p_transport::{load_key_from_disk, N0Discovery, NodeExtraConfig, TransportNode};
+use std::env;
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{info, level_filters::LevelFilter};
@@ -15,6 +17,13 @@ mod proto;
 mod route;
 mod tun;
 
+fn get_metrics_addr() -> std::net::SocketAddr {
+    let port: u16 = env::var("METRICS_PORT")
+        .map(|p| p.parse().expect("METRICS_PORT must be a valid u16 number"))
+        .unwrap_or_else(|_| 9189);
+    std::net::SocketAddr::new(std::net::Ipv6Addr::UNSPECIFIED.into(), port)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -27,6 +36,10 @@ async fn main() -> Result<(), anyhow::Error> {
         "Logging level is {:?}; change the RUST_LOG environment variable to set a different level",
         LevelFilter::current()
     );
+    metrics_exporter_prometheus::PrometheusBuilder::new()
+        .with_http_listener(get_metrics_addr())
+        .install()
+        .expect("failed to install Prometheus metrics recorder/exporter");
 
     let net_route_handle = Arc::new(net_route::Handle::new()?);
     let tun = tun::Tun::new(None).await?;
