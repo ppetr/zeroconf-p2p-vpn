@@ -36,7 +36,6 @@ pub fn validate_addresses(
     (valid, errors)
 }
 
-
 /// Validates a `v1::HostAddress` against the host's public key.
 fn validate_address(host: &proto::v1::HostAddress, key: &PublicKey) -> Result<IpNet> {
     let net: IpNet = host.peer_network.parse()?;

@@ -47,8 +47,7 @@ impl BufferPool {
     }
 }
 
-fn report_available(sender: &mpsc::Sender<Box<[u8]>>,
-                    capacity_gauge: &metrics::Gauge) {
+fn report_available(sender: &mpsc::Sender<Box<[u8]>>, capacity_gauge: &metrics::Gauge) {
     capacity_gauge.set((sender.max_capacity() - sender.capacity()) as u32);
 }
 

@@ -11,6 +11,7 @@ use thin_status::{ErrorCode, ThinStatus};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
+mod conn_metrics;
 mod validate_addr;
 
 use crate::addr;
@@ -77,6 +78,16 @@ impl Peer {
             "Handshake successfully completed"
         );
         counter!(description: "Successful handshakes", "p2p_vpn_peer_handshakes").increment(1);
+
+        // This is fine if the number of peers is low. Should there be a lot (hundreds or
+        // thousands), then having too high cardinality of this metric could start to be
+        // problematic.
+        let quin_metrics = conn_metrics::QuinnMetrics::new(vec![metrics::Label::new(
+            "peer",
+            self.public_key().to_z32(),
+        )])
+        .spawn_exporter(self.config.conn.clone(), Duration::from_secs(5));
+
         let control = self.recv_control_loop(routes);
         let send = async {
             let icmp_gateway = tun::IcmpGateway::from_addr(self.config.common.own_net.addr());
@@ -131,6 +142,7 @@ impl Peer {
             r = send => r,
             r = recv => r?,
         };
+        quin_metrics.abort();
         Ok(())
     }
 
