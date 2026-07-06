@@ -3,6 +3,40 @@ Zero-conf p2p VPN
 
 *Disclaimer: This is a personal project. The views, code, and opinions expressed here are my own and do not represent those of my current or past employers.*
 
+Overview
+--------
+
+A lightweight peer-to-peer VPN daemon for establishing direct, authenticated
+connections between trusted peers.
+
+There are no central servers, controllers or configuration databases. A
+connection is established only between peers that explicitly trust each other,
+identified by their Ed25519 public keys. Once trust is established, the daemon
+takes care of connection management, NAT traversal and route exchange
+automatically.
+
+p2p-vpn intentionally does **not** implement generic mesh forwarding. Peers do
+not relay arbitrary traffic for others. Every connection is direct, keeping the
+trust model simple and network behaviour predictable.
+
+Features
+--------
+
+* IPv6-first design.
+* Built on QUIC for secure and reliable transport.
+* Efficient packet forwarding with minimal memory allocations.
+* Small, self-contained daemon with few runtime dependencies.
+
+Design principles
+-----------------
+
+* Trust is explicit; everything else is automatic.
+* Connections exist only between mutually trusted peers.
+* Configure identities, not tunnels.
+* Prefer direct connectivity through NAT traversal.
+* No generic transit through unrelated peers.
+* Keep the implementation simple, reliable, deterministic and maintainable.
+
 Architectecture plan
 --------------------
 
