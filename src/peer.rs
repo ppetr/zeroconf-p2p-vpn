@@ -104,7 +104,7 @@ impl Peer {
                             tun::IcmpType::packet_too_big(mtu),
                         ) {
                             Ok(addr) => {
-                                let buf = tun::TxPacket { data: buf.freeze() };
+                                let buf = tun::TxPacket::new(buf.freeze());
                                 tracing::debug!(packet = ?buf, "Sending ICMP packet to reduce MTU to {}", mtu);
                                 histogram!(description: "ICMP packets to reduce MTU",
                                     unit: metrics::Unit::Bytes,
@@ -129,12 +129,16 @@ impl Peer {
                     .conn
                     .send_datagram_wait(Bytes::from_owner(packet.data))
                     .await;
+                histogram!(description: "Total time processing a packet TUN->QUIC (ms)",
+                           unit: metrics::Unit::Milliseconds,
+                           "p2p_vpn_tun_to_quic")
+                .record(tun::elapsed_millis(packet.populated_at));
             }
         };
         let recv = async {
             Ok::<(), Error>(loop {
                 let bytes = self.config.conn.read_datagram().await?;
-                tx_packet.send(tun::TxPacket { data: bytes }).await?;
+                tx_packet.send(tun::TxPacket::new(bytes)).await?;
             })
         };
         tokio::select! {

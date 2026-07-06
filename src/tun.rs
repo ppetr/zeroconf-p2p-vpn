@@ -97,7 +97,7 @@ impl Tun {
                 };
                 recv_packets_histogram.record(buf.len() as u32);
                 if buf.len() > 0 {
-                    rx_packet.send(RxPacket { data: buf.into() }).await?;
+                    rx_packet.send(RxPacket::new(buf.into())).await?;
                 }
             })
         };
@@ -116,6 +116,10 @@ impl Tun {
                     }
                     r => r?,
                 };
+                histogram!(description: "Total time processing a packet QUIC->TUN (ms)",
+                           unit: metrics::Unit::Milliseconds,
+                           "p2p_vpn_tun_from_quic")
+                .record(packet::elapsed_millis(bytes.populated_at));
             })
         };
 

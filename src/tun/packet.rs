@@ -5,6 +5,7 @@ use etherparse::{InternetSlice, PacketBuilder, PacketHeaders, SlicedPacket};
 use pretty_hex::PrettyHex;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ops::Deref;
+use std::time::Instant;
 
 pub use crate::buffer_pool::PooledSlice;
 
@@ -16,8 +17,23 @@ fn format_packet(packet: &[u8], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Re
     builder.field("payload", &packet.hex_dump()).finish()
 }
 
+pub fn elapsed_millis(since: Instant) -> f64 {
+    let elapsed = since.elapsed();
+    (elapsed.as_secs() as f64 * 1000.0) + (elapsed.subsec_nanos() as f64 / 1_000_000.0)
+}
+
 pub struct TxPacket {
     pub data: Bytes,
+    pub populated_at: Instant,
+}
+
+impl TxPacket {
+    pub fn new(data: Bytes) -> Self {
+        Self {
+            data,
+            populated_at: Instant::now(),
+        }
+    }
 }
 
 impl Deref for TxPacket {
@@ -36,7 +52,16 @@ impl std::fmt::Debug for TxPacket {
 
 pub struct RxPacket {
     pub data: PooledSlice,
-    // IP address of the incoming packet will be added here.
+    pub populated_at: std::time::Instant,
+}
+
+impl RxPacket {
+    pub fn new(data: PooledSlice) -> Self {
+        Self {
+            data,
+            populated_at: Instant::now(),
+        }
+    }
 }
 
 impl Deref for RxPacket {
