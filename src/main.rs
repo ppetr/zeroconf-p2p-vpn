@@ -11,6 +11,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 
 mod addr;
 mod buffer_pool;
+mod connection;
 mod error;
 mod osal;
 mod peer;
