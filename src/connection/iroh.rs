@@ -1,13 +1,14 @@
-use iroh::endpoint::{Connection, Side, VarInt};
+use iroh::endpoint::{ConnectError, Connection, Endpoint, Side, VarInt};
 use iroh::EndpointId;
 use thin_status::ThinStatus;
 use tokio::sync::mpsc;
 
 use super::actor::*;
+use super::connect::*;
 
 #[derive(Clone, Debug)]
-struct IrohConnection {
-    conn: Connection,
+pub struct IrohConnection {
+    pub conn: Connection,
 }
 
 impl PartialEq<IrohConnection> for Connection {
@@ -40,5 +41,23 @@ impl ManagedConnection for IrohConnection {
             let _ = clone.closed().await;
             let _ = on_close.send(clone).await;
         });
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct IrohConnector {
+    pub local: Endpoint,
+    pub peer: EndpointId,
+    pub alpn: Vec<u8>,
+}
+
+impl OutgoingConnector for IrohConnector {
+    type Connection = IrohConnection;
+    type Error = ConnectError;
+
+    async fn connect(&self) -> Result<IrohConnection, Self::Error> {
+        Ok(IrohConnection {
+            conn: self.local.connect(self.peer, self.alpn.as_ref()).await?,
+        })
     }
 }

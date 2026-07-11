@@ -7,6 +7,7 @@ license = "Apache 2.0"
 
 [dependencies]
 anyhow = "1.0"
+backoff = "0.4"
 bytes = "1.6"
 buf-list = "1.1"
 etherparse = "0.20"
@@ -27,10 +28,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tun-rs = { version = "2.8.5", features = ["async"] }
 secure-p2p-transport = { git = "https://github.com/ppetr/secure-p2p-transport.git" }
 
-
 [build-dependencies]
 prost = "0.14.4"
 prost-build = "0.14.4"
+
+[dev-dependencies]
+test-log = "0.2.17"
+
 
 [profile.dev]
 opt-level = 0
