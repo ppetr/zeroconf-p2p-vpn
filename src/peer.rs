@@ -173,7 +173,7 @@ impl Peer {
     /// Sends an Advertise handshake.
     async fn send_advertise(&self) -> Result<()> {
         let cmd = control_request::Command::Advertise(self.config.advertise.clone());
-        tracing::debug_span!(
+        let _span = tracing::debug_span!(
             "send_advertise",
             peer = self.public_key().to_z32(),
             "Sending Command::Advertise {:?}",
@@ -192,7 +192,7 @@ impl Peer {
     ///
     /// Returns an error if as the result the connection is closed.
     async fn recv_control(&self, routes: &mut Vec<route::ScopedRoute>) -> Result<()> {
-        tracing::debug_span!(
+        let _span = tracing::debug_span!(
             "recv_control",
             peer = self.public_key().to_z32(),
             "Receiving ControlRequest"

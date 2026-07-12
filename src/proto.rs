@@ -92,7 +92,7 @@ pub async fn write_control_stream<P: Message>(mut send: SendStream, message: &P)
     let mut buf = Vec::with_capacity(MAX_MESSAGE_SIZE);
     message.encode(&mut buf)?;
     let result = send.write_all(&buf).await;
-    tracing::debug_span!("Waiting for the peer to receive all data");
+    let _span = tracing::debug_span!("Waiting for the peer to receive all data");
     send.finish()?;
     send.stopped().await?;
     result?;
