@@ -1,3 +1,4 @@
+use std::convert::Infallible;
 use std::sync::Arc;
 use thin_status::{ErrorCode::*, ThinStatus, ThinStatusExt};
 use tokio::sync::{mpsc, watch, Notify};
@@ -75,34 +76,36 @@ impl<C: ManagedConnection> Actor<C> {
         self.conn_tx.clone()
     }
 
-    pub async fn run(mut self) {
+    pub async fn run(mut self) -> Result<Infallible, ThinStatus> {
+        let _cancel = self.cancellation.drop_guard_ref();
         let (closed_tx, mut closed_rx) = mpsc::channel(32);
 
         // Ensure connector attempts an outgoing connection immediately on startup
         self.notify_connector.notify_one();
 
-        loop {
+        let result = loop {
             tokio::select! {
-                _ = self.cancellation.cancelled() => {
-                    break;
-                }
-                Some(conn) = self.conn_rx.recv() =>
-                    self.handle_connection_candidate(&closed_tx, conn),
-                Some(closed_conn) = closed_rx.recv() =>
-                    self.handle_connection_closed(closed_conn),
-                else => {
-                    self.cancellation.cancel();
-                    break
-                }
+                _ = self.cancellation.cancelled() => break Cancelled.into(),
+                c = self.conn_rx.recv() => if let Some(conn) = c {
+                        self.handle_connection_candidate(&closed_tx, conn)
+                    } else {
+                        break "Incoming connection queue closed".error_code(FailedPrecondition)
+                    },
+                c = closed_rx.recv() => if let Some(closed_conn) = c {
+                        self.handle_connection_closed(closed_conn)
+                    } else {
+                        panic!("Closed connection queue closed unexpectedly");
+                    },
             }
-        }
+        };
         self.watch_tx.send_if_modified(|current| {
             if let Some(conn) = std::mem::replace(current, None) {
-                conn.close_connection("Connection manager exiting".error_code(FailedPrecondition));
+                conn.close_connection(result.clone());
             }
             // Do not notify the connector as we won't accept any more connections.
             true
         });
+        Err(result)
     }
 
     fn handle_connection_candidate(&self, closed_tx: &mpsc::Sender<C::ConnectionId>, new_conn: C) {
