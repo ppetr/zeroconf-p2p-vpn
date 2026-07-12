@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 use std::sync::Arc;
 use thin_status::{ErrorCode::*, ThinStatus, ThinStatusExt};
-use tokio::sync::{mpsc, watch, Notify};
+use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -31,7 +31,6 @@ pub struct Actor<C: ManagedConnection> {
     watch_tx: watch::Sender<Option<C>>,
     conn_tx: mpsc::Sender<C>,
     conn_rx: mpsc::Receiver<C>,
-    notify_connector: Arc<Notify>,
     cancellation: CancellationToken,
 }
 
@@ -41,14 +40,10 @@ impl<C: ManagedConnection> Actor<C> {
     ///
     /// `local_key` - the key of the local connection, to be compared with `C::peer_key()`.
     /// `watch_tx` - notifications of new or dropped connections are sent to this `watch`.
-    /// `notify_connector` - notified when a connection is closed; this should be tied to a task
-    ///     that reacts to such a notification by attempting to open a new connection and then
-    ///     submitting it to `connection_queue`.
     pub fn new(
         local_key: C::Key,
         remote_key: C::Key,
         watch_tx: watch::Sender<Option<C>>,
-        notify_connector: Arc<Notify>,
         cancellation: CancellationToken,
     ) -> Self {
         let (conn_tx, conn_rx) = mpsc::channel(32);
@@ -61,7 +56,6 @@ impl<C: ManagedConnection> Actor<C> {
             watch_tx,
             conn_tx,
             conn_rx,
-            notify_connector,
             cancellation,
         }
     }
@@ -79,9 +73,6 @@ impl<C: ManagedConnection> Actor<C> {
     pub async fn run(mut self) -> Result<Infallible, ThinStatus> {
         let _cancel = self.cancellation.drop_guard_ref();
         let (closed_tx, mut closed_rx) = mpsc::channel(32);
-
-        // Ensure connector attempts an outgoing connection immediately on startup
-        self.notify_connector.notify_one();
 
         let result = loop {
             tokio::select! {
@@ -103,7 +94,7 @@ impl<C: ManagedConnection> Actor<C> {
                 conn.close_connection(result.clone());
             }
             // Do not notify the connector as we won't accept any more connections.
-            true
+            false
         });
         Err(result)
     }
@@ -144,8 +135,6 @@ impl<C: ManagedConnection> Actor<C> {
             if let Some(active) = current {
                 if closed_conn_id == *active {
                     *current = None;
-                    // Trigger reconnect loop because the active authoritative connection was lost
-                    self.notify_connector.notify_one();
                     return true;
                 }
             }
@@ -158,10 +147,7 @@ impl<C: ManagedConnection> Actor<C> {
 mod tests {
     use super::*;
 
-    use std::sync::{
-        atomic::{AtomicBool, Ordering},
-        OnceLock,
-    };
+    use std::sync::OnceLock;
 
     use tokio::sync::{mpsc, watch, Notify};
     use tokio::time::{timeout, Duration};
@@ -171,22 +157,25 @@ mod tests {
     struct FakeConnection {
         id: isize,
         direction: Direction,
-        closed: Arc<AtomicBool>,
+        closed_tx: watch::Sender<bool>,
+        closed_rx: watch::Receiver<bool>,
         closed_signal: Arc<OnceLock<mpsc::Sender<isize>>>,
     }
 
     impl FakeConnection {
         fn new(id: isize, direction: Direction) -> Self {
+            let (closed_tx, closed_rx) = watch::channel(false);
             Self {
                 id,
                 direction,
-                closed: Arc::new(AtomicBool::new(false)),
+                closed_tx,
+                closed_rx,
                 closed_signal: Arc::new(OnceLock::new()),
             }
         }
 
         fn was_closed(&self) -> bool {
-            self.closed.load(Ordering::SeqCst)
+            *self.closed_rx.borrow()
         }
 
         async fn close_from_remote(&self) {
@@ -214,7 +203,7 @@ mod tests {
         }
 
         fn close_connection(self, _: ThinStatus) {
-            self.closed.store(true, Ordering::SeqCst);
+            let _ = self.closed_tx.send(true);
         }
 
         fn spawn_closed_watcher(&self, on_close: mpsc::Sender<Self::ConnectionId>) {
@@ -227,7 +216,6 @@ mod tests {
     struct TestActor {
         sender: mpsc::Sender<FakeConnection>,
         receiver: watch::Receiver<Option<FakeConnection>>,
-        notify: Arc<Notify>,
         cancellation: CancellationToken,
     }
 
@@ -235,16 +223,9 @@ mod tests {
         fn new(local_key: isize, remote_key: isize) -> Self {
             let (watch_tx, watch_rx) = watch::channel(None);
 
-            let notify = Arc::new(Notify::new());
             let cancellation = CancellationToken::new();
 
-            let actor = Actor::new(
-                local_key,
-                remote_key,
-                watch_tx,
-                notify.clone(),
-                cancellation.clone(),
-            );
+            let actor = Actor::new(local_key, remote_key, watch_tx, cancellation.clone());
 
             let sender = actor.connection_queue();
 
@@ -253,7 +234,6 @@ mod tests {
             TestActor {
                 sender,
                 receiver: watch_rx,
-                notify,
                 cancellation,
             }
         }
@@ -271,7 +251,10 @@ mod tests {
 
         async fn wait_for_connection(&mut self) -> Option<FakeConnection> {
             timeout(Duration::from_secs(1), async {
-                self.receiver.changed().await.unwrap();
+                self.receiver
+                    .changed()
+                    .await
+                    .expect("Connection queue closed");
                 self.receiver.borrow_and_update().clone()
             })
             .await
@@ -394,46 +377,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn active_close_notifies_connector() {
-        let mut actor = TestActor::new(1, 2);
-
-        let conn = FakeConnection::new(1, Direction::Incoming);
-
-        let _ = actor.send_and_wait(&conn).await;
-
-        conn.close_from_remote().await;
-
-        timeout(Duration::from_secs(1), actor.notify.notified())
-            .await
-            .expect("connector was not notified");
-
-        actor.cancellation.cancel();
-    }
-
-    #[tokio::test]
-    async fn actor_notifies_connector_on_startup() {
-        let actor = TestActor::new(1, 2);
-
-        timeout(Duration::from_secs(1), actor.notify.notified())
-            .await
-            .expect("startup notification missing");
-
-        actor.cancellation.cancel();
-    }
-
-    #[tokio::test]
     async fn shutdown_closes_active_connection() {
         let mut actor = TestActor::new(1, 2);
 
-        let conn = FakeConnection::new(1, Direction::Incoming);
+        let mut conn = FakeConnection::new(1, Direction::Incoming);
 
-        let _ = actor.send_and_wait(&conn).await;
+        let current = actor.send_and_wait(&conn).await;
+        assert_eq!(current.id, conn.id);
+        conn.closed_rx.mark_unchanged();
 
         actor.cancellation.cancel();
 
-        let current = actor.wait_for_connection().await;
-        assert!(current.is_none());
-
+        conn.closed_rx.changed().await;
         assert!(conn.was_closed());
     }
 

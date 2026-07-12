@@ -1,5 +1,6 @@
 use iroh::endpoint::{ConnectError, Connection, Endpoint, Side, VarInt};
 use iroh::EndpointId;
+use std::sync::Arc;
 use thin_status::ThinStatus;
 use tokio::sync::mpsc;
 
@@ -48,7 +49,7 @@ impl ManagedConnection for IrohConnection {
 pub struct IrohConnector {
     pub local: Endpoint,
     pub peer: EndpointId,
-    pub alpn: Vec<u8>,
+    pub alpn: Arc<Vec<u8>>,
 }
 
 impl OutgoingConnector for IrohConnector {
