@@ -33,6 +33,7 @@ prost = "0.14.4"
 prost-build = "0.14.4"
 
 [dev-dependencies]
+ntest = "0.9.4"
 test-log = "0.2.17"
 
 
