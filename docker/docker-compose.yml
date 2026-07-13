@@ -20,6 +20,7 @@ services:
     entrypoint:
       - /zeroconf-p2p-vpn
       - keys/alice.raw
+      - 18x6mrteyqw6oqga8418afrnamm3mpwftcojtre5j4crpeqzf66o
 
   node-bob:
     build:

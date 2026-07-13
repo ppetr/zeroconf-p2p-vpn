@@ -65,6 +65,7 @@ impl<C: ManagedConnection> Actor<C> {
     pub async fn run(&mut self, cancellation: CancellationToken) -> Result<Infallible, ThinStatus> {
         let _cancel = cancellation.drop_guard_ref();
         let (closed_tx, mut closed_rx) = mpsc::channel(32);
+        tracing::info!("Preferred direction: {:?}", self.preferred);
 
         let result = loop {
             tokio::select! {

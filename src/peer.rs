@@ -23,6 +23,7 @@ use crate::proto::v1::ControlRequest;
 use crate::route;
 use crate::tun::packet as tun;
 
+#[derive(Clone)]
 pub struct CommonPeerConfig {
     pub allowed_networks: Vec<IpNet>,
     pub handshake_timeout: Duration,
@@ -48,12 +49,14 @@ impl CommonPeerConfig {
     }
 }
 
+#[derive(Clone)]
 pub struct PeerConfig {
     pub common: Arc<CommonPeerConfig>,
     pub conn: Connection,
     pub advertise: proto::v1::Advertise,
 }
 
+#[derive(Clone)]
 pub struct Peer {
     config: PeerConfig,
 }
@@ -69,7 +72,7 @@ impl Peer {
 
     pub async fn communicate(
         &mut self,
-        mut rx_packet: mpsc::Receiver<tun::RxPacket>,
+        rx_packet: &mut mpsc::Receiver<tun::RxPacket>,
         tx_packet: mpsc::Sender<tun::TxPacket>,
     ) -> Result<()> {
         let routes = self.handshake().await?;

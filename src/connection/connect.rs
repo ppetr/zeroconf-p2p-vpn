@@ -58,7 +58,7 @@ impl<C: OutgoingConnector> OutgoingConnectLoop<C> {
             };
 
             if delay > std::time::Duration::ZERO {
-                let span = tracing::debug_span!("backoff_sleep");
+                let span = tracing::debug_span!("backoff_sleep", delay = ?delay);
                 tokio::select! {
                     _ = tokio::time::sleep(delay) => {
                         // Backoff delay expired, proceed to connect
@@ -96,7 +96,7 @@ impl<C: OutgoingConnector> OutgoingConnectLoop<C> {
                         retry_backoff.reset();
                     }
                     Err(err) => {
-                        tracing::info!(error = ?err, "Connection attempt failed, retrying with a back-off");
+                        tracing::info!(error = ?err, backoff = ?delay, "Connection attempt failed, retrying with a back-off");
                     }
                 },
                 _ = cancellation.cancelled() => break Cancelled.into(),

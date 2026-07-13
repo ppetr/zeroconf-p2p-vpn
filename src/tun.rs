@@ -59,7 +59,7 @@ impl Tun {
         ))
     }
 
-    pub async fn control(self, opts: TunControlOpts) -> Result<()> {
+    pub async fn control(&self, opts: TunControlOpts) -> Result<()> {
         let pool_gauge = gauge!(
             description: "The capacity of the internal buffer pool; 0 means starvation",
             "p2p_vpn_tun_read_buffer_pool_capacity",
