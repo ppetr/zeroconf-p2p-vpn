@@ -31,11 +31,12 @@ impl<C: OutgoingConnector> OutgoingConnectLoop<C> {
         }
     }
 
-    async fn run(
+    pub async fn run(
         mut self,
         retry_backoff: &mut impl Backoff,
         cancellation: CancellationToken,
     ) -> Result<Infallible, ThinStatus> {
+        retry_backoff.reset();
         let _cancel = cancellation.drop_guard_ref();
         let err = loop {
             // Read the current state and mark it as seen

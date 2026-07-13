@@ -31,7 +31,6 @@ pub struct Actor<C: ManagedConnection> {
     watch_tx: watch::Sender<Option<C>>,
     conn_tx: mpsc::Sender<C>,
     conn_rx: mpsc::Receiver<C>,
-    cancellation: CancellationToken,
 }
 
 impl<C: ManagedConnection> Actor<C> {
@@ -40,12 +39,7 @@ impl<C: ManagedConnection> Actor<C> {
     ///
     /// `local_key` - the key of the local connection, to be compared with `C::peer_key()`.
     /// `watch_tx` - notifications of new or dropped connections are sent to this `watch`.
-    pub fn new(
-        local_key: C::Key,
-        remote_key: C::Key,
-        watch_tx: watch::Sender<Option<C>>,
-        cancellation: CancellationToken,
-    ) -> Self {
+    pub fn new(local_key: C::Key, remote_key: C::Key, watch_tx: watch::Sender<Option<C>>) -> Self {
         let (conn_tx, conn_rx) = mpsc::channel(32);
         Self {
             preferred: if local_key > remote_key {
@@ -56,7 +50,6 @@ impl<C: ManagedConnection> Actor<C> {
             watch_tx,
             conn_tx,
             conn_rx,
-            cancellation,
         }
     }
 
@@ -70,23 +63,19 @@ impl<C: ManagedConnection> Actor<C> {
         self.conn_tx.clone()
     }
 
-    pub async fn run(mut self) -> Result<Infallible, ThinStatus> {
-        let _cancel = self.cancellation.drop_guard_ref();
+    pub async fn run(&mut self, cancellation: CancellationToken) -> Result<Infallible, ThinStatus> {
+        let _cancel = cancellation.drop_guard_ref();
         let (closed_tx, mut closed_rx) = mpsc::channel(32);
 
         let result = loop {
             tokio::select! {
-                _ = self.cancellation.cancelled() => break Cancelled.into(),
+                _ = cancellation.cancelled() => break Cancelled.into(),
                 c = self.conn_rx.recv() => if let Some(conn) = c {
                         self.handle_connection_candidate(&closed_tx, conn)
                     } else {
                         break "Incoming connection queue closed".error_code(FailedPrecondition)
                     },
-                c = closed_rx.recv() => if let Some(closed_conn) = c {
-                        self.handle_connection_closed(closed_conn)
-                    } else {
-                        panic!("Closed connection queue closed unexpectedly");
-                    },
+                Some(closed_conn) = closed_rx.recv() => self.handle_connection_closed(closed_conn),
             }
         };
         self.watch_tx.send_if_modified(|current| {
@@ -149,7 +138,7 @@ mod tests {
 
     use std::sync::OnceLock;
 
-    use tokio::sync::{mpsc, watch, Notify};
+    use tokio::sync::{mpsc, watch};
     use tokio::time::{timeout, Duration};
     use tokio_util::sync::CancellationToken;
 
@@ -225,11 +214,12 @@ mod tests {
 
             let cancellation = CancellationToken::new();
 
-            let actor = Actor::new(local_key, remote_key, watch_tx, cancellation.clone());
+            let mut actor = Actor::new(local_key, remote_key, watch_tx);
 
             let sender = actor.connection_queue();
 
-            tokio::spawn(actor.run());
+            let cancellation_clone = cancellation.clone();
+            tokio::spawn(async move { actor.run(cancellation_clone).await });
 
             TestActor {
                 sender,
@@ -388,7 +378,7 @@ mod tests {
 
         actor.cancellation.cancel();
 
-        conn.closed_rx.changed().await;
+        conn.closed_rx.changed().await.unwrap();
         assert!(conn.was_closed());
     }
 
