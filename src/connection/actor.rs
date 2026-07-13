@@ -1,5 +1,4 @@
 use std::convert::Infallible;
-use std::sync::Arc;
 use thin_status::{ErrorCode::*, ThinStatus, ThinStatusExt};
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
@@ -21,7 +20,7 @@ pub trait ManagedConnection: std::fmt::Debug + Send + Sync + 'static {
     /// Whether this direction is Incoming or Outgoing.
     fn direction(&self) -> Direction;
     /// Close this connection with a reason.
-    fn close_connection(self, status: ThinStatus);
+    fn close(self, status: ThinStatus);
     /// Spawns an asynchronous thread that notifies `on_close` once this connection is closed.
     fn spawn_closed_watcher(&self, on_close: mpsc::Sender<Self::ConnectionId>);
 }
@@ -80,7 +79,7 @@ impl<C: ManagedConnection> Actor<C> {
         };
         self.watch_tx.send_if_modified(|current| {
             if let Some(conn) = std::mem::replace(current, None) {
-                conn.close_connection(result.clone());
+                conn.close(result.clone());
             }
             // Do not notify the connector as we won't accept any more connections.
             false
@@ -94,9 +93,7 @@ impl<C: ManagedConnection> Actor<C> {
             match &mut *current {
                 Some(current) if new_conn.direction() != self.preferred => {
                     tracing::debug!("Rejecting new {:?}; current: {:?}", new_conn, current);
-                    new_conn.close_connection(
-                        "Rejected by deterministic preference rule".error_code(Aborted),
-                    );
+                    new_conn.close("Rejected by deterministic preference rule".error_code(Aborted));
                     false
                 }
                 current => {
@@ -107,7 +104,7 @@ impl<C: ManagedConnection> Actor<C> {
                     let replaced = std::mem::replace(current, Some(new_conn));
                     // Gracefully close the replaced connection after watch state transition
                     if let Some(old_conn) = replaced {
-                        old_conn.close_connection(
+                        old_conn.close(
                             "Replaced by new connection following deterministic preference rule"
                                 .error_code(Aborted),
                         );
@@ -135,9 +132,7 @@ impl<C: ManagedConnection> Actor<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use std::sync::OnceLock;
-
+    use std::sync::{Arc, OnceLock};
     use tokio::sync::{mpsc, watch};
     use tokio::time::{timeout, Duration};
     use tokio_util::sync::CancellationToken;
@@ -191,7 +186,7 @@ mod tests {
             self.direction
         }
 
-        fn close_connection(self, _: ThinStatus) {
+        fn close(self, _: ThinStatus) {
             let _ = self.closed_tx.send(true);
         }
 

@@ -1,8 +1,7 @@
 use backoff::backoff::Backoff;
 use std::convert::Infallible;
 use thin_status::{ErrorCode::*, ThinStatus, ThinStatusExt};
-use tokio::sync::{mpsc, watch, Notify};
-use tokio::time::timeout;
+use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 pub trait OutgoingConnector {
@@ -113,7 +112,8 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use std::time::Duration;
-    use tokio::sync::{mpsc, watch};
+    use tokio::sync::{mpsc, watch, Notify};
+    use tokio::time::timeout;
 
     #[derive(Debug)]
     struct MockBackoff {

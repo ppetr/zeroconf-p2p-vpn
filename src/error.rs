@@ -105,3 +105,16 @@ fn error_kind_str(kind: ErrorKind) -> &'static str {
         Other | _ => "Other",
     }
 }
+
+#[macro_export]
+macro_rules! check_eq {
+    ($left:expr, $right:expr) => {
+        if $left != $right {
+            let mut status = ThinStatus::builder(ErrorCode::Internal);
+            let _ = write!(status, "{} != {}", stringify!($left), stringify!($right));
+            Err(status)
+        } else {
+            Ok(())
+        }
+    };
+}

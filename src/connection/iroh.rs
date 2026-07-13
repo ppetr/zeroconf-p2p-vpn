@@ -29,7 +29,7 @@ impl ManagedConnection for IrohConnection {
         }
     }
 
-    fn close_connection(self, status: ThinStatus) {
+    fn close(self, status: ThinStatus) {
         self.conn.close(
             VarInt::from_u32(i32::from(status.code_raw()) as u32),
             status.message().as_bytes(),

@@ -1,7 +1,7 @@
 use backoff::backoff::Backoff;
 use iroh::endpoint::Connection;
-use std::convert::Infallible;
-use thin_status::{ErrorCode, ThinStatus};
+use std::fmt::Write;
+use thin_status::{ErrorCode, ThinStatus, ThinStatusExt};
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::{CancellationToken, DropGuard};
 
@@ -41,7 +41,7 @@ impl PeerLink {
             }
             if actor_err.code_or_unknown() != ErrorCode::Cancelled {
                 tracing::error!(error = ?actor_err, "Actor terminated unexpectedly");
-                err = actor_err;  // Keep the non-cancelled error.
+                err = actor_err; // Keep the non-cancelled error.
             }
             err
         });
@@ -55,15 +55,25 @@ impl PeerLink {
         link
     }
 
-    /// Returns a `Connection` created by either
+    /// Returns a `Connection` created by either the `OutgoingConnectLoop` managed internally, or
+    /// submitted by `send_incoming`.
     pub fn connection(&self) -> Option<Connection> {
         self.watch_rx.borrow().as_ref().map(|c| c.conn.clone())
     }
 
-    pub async fn send_incoming(
-        &self,
-        conn: Connection,
-    ) -> Result<(), mpsc::error::SendError<IrohConnection>> {
-        self.conn_tx.send(IrohConnection { conn }).await
+    /// Accepts an incoming connection
+    pub async fn send_incoming(&self, conn: Connection) -> Result<(), ThinStatus> {
+        let conn = IrohConnection { conn };
+        if let Err(builder) = crate::check_eq!(conn.conn.remote_id(), self.connector.peer) {
+            let mut builder = builder.code(ErrorCode::InvalidArgument);
+            let _ = write!(builder, "; remote peer address doesn't match the configured one");
+            let status = builder.build();
+            conn.close(status.clone());
+            return Err(status);
+        }
+        self.conn_tx
+            .send(conn)
+            .await
+            .map_err(|e| e.error_code(ErrorCode::FailedPrecondition))
     }
 }
