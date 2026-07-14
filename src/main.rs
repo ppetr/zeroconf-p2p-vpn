@@ -7,6 +7,7 @@ use std::env;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, level_filters::LevelFilter};
 use tracing_subscriber::fmt::format::FmtSpan;
 
@@ -69,14 +70,13 @@ async fn main() -> Result<(), anyhow::Error> {
             let peer_key = PublicKey::from_z32(peer_base32)
                 .context(format!("When decoding public key '{}'", peer_base32))?;
             let node = TransportNode::new(secret_key.clone(), alpn.to_vec(), &node_config).await?;
-            let link = connection::PeerLink::new(
-                connection::IrohConnector {
-                    local: node.endpoint(),
-                    peer: peer_key,
-                    alpn: alpn.clone(),
-                },
-                backoff,
-            );
+
+            let link = connection::PeerLink::new(connection::IrohConnector {
+                local: node.endpoint(),
+                peer: peer_key,
+                alpn: alpn.clone(),
+            });
+            let (link, _) = link.spawn(backoff, CancellationToken::new());
 
             let incoming = link.incoming_receiver();
             tokio::spawn(async move {

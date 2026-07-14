@@ -1,7 +1,8 @@
+use std::sync::Arc;
 use thin_status::{ErrorCode::*, ThinStatus, ThinStatusExt};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
-use tokio_util::sync::CancellationToken;
+use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::error;
 
@@ -68,10 +69,18 @@ impl<C: ManagedConnection> Actor<C> {
         self,
         cancellation: CancellationToken,
     ) -> (ActorHandle<C>, JoinHandle<Result<(), ThinStatus>>) {
+        let drop_guard = cancellation.clone().drop_guard();
         let watch_rx = self.subscribe();
         let conn_tx = self.connection_queue();
         let handle = tokio::spawn(self.run(cancellation));
-        (ActorHandle { watch_rx, conn_tx }, handle)
+        (
+            ActorHandle {
+                watch_rx,
+                conn_tx,
+                _drop_guard: Arc::new(drop_guard),
+            },
+            handle,
+        )
     }
 
     pub async fn run(mut self, cancellation: CancellationToken) -> Result<(), ThinStatus> {
@@ -146,12 +155,13 @@ impl<C: ManagedConnection> Actor<C> {
 pub struct ActorHandle<C: ManagedConnection> {
     pub watch_rx: watch::Receiver<Option<C>>,
     pub conn_tx: mpsc::Sender<C>,
+    _drop_guard: Arc<DropGuard>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, OnceLock};
+    use std::sync::OnceLock;
     use tokio::sync::{mpsc, watch};
     use tokio::time::{timeout, Duration};
     use tokio_util::sync::CancellationToken;
@@ -217,8 +227,7 @@ mod tests {
     }
 
     struct TestActor {
-        sender: mpsc::Sender<FakeConnection>,
-        receiver: watch::Receiver<Option<FakeConnection>>,
+        actor: ActorHandle<FakeConnection>,
         cancellation: CancellationToken,
     }
 
@@ -229,33 +238,36 @@ mod tests {
             let cancellation = CancellationToken::new();
 
             let actor = Actor::new(local_key, remote_key, watch_tx);
-            let (handle, _) = actor.spawn(cancellation.clone());
+            let (actor, _) = actor.spawn(cancellation.clone());
 
             TestActor {
-                sender: handle.conn_tx,
-                receiver: handle.watch_rx,
+                actor,
                 cancellation,
             }
         }
 
         async fn send(&mut self, conn: &FakeConnection) {
-            self.sender.send(conn.clone()).await.unwrap();
+            self.actor.conn_tx.send(conn.clone()).await.unwrap();
         }
 
         async fn send_and_wait(&mut self, conn: &FakeConnection) -> FakeConnection {
-            self.sender.send(conn.clone()).await.unwrap();
+            self.actor.conn_tx.send(conn.clone()).await.unwrap();
             self.wait_for_connection()
                 .await
                 .expect("connection was not installed")
         }
 
+        fn receiver(&mut self) -> &mut watch::Receiver<Option<FakeConnection>> {
+            &mut self.actor.watch_rx
+        }
+
         async fn wait_for_connection(&mut self) -> Option<FakeConnection> {
             timeout(Duration::from_secs(1), async {
-                self.receiver
+                self.receiver()
                     .changed()
                     .await
                     .expect("Connection queue closed");
-                self.receiver.borrow_and_update().clone()
+                self.receiver().borrow_and_update().clone()
             })
             .await
             .expect("timed out waiting for a connection")
@@ -266,7 +278,7 @@ mod tests {
     async fn subscribe_initially_returns_none() {
         let mut actor = TestActor::new(1, 2);
 
-        assert!(actor.receiver.borrow_and_update().is_none());
+        assert!(actor.receiver().borrow_and_update().is_none());
 
         actor.cancellation.cancel();
     }
@@ -325,9 +337,9 @@ mod tests {
         .await
         .expect("timed out waiting for `incoming` to be closed by `actor`");
 
-        assert!(!actor.receiver.has_changed().unwrap());
+        assert!(!actor.receiver().has_changed().unwrap());
         let current = actor
-            .receiver
+            .receiver()
             .borrow_and_update()
             .clone()
             .expect("connection was not installed");
@@ -366,7 +378,7 @@ mod tests {
         old.close_from_remote().await;
 
         let current = actor
-            .receiver
+            .receiver()
             .borrow_and_update()
             .clone()
             .expect("connection was not installed");

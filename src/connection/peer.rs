@@ -1,8 +1,10 @@
 use backoff::backoff::Backoff;
 use iroh::{endpoint::Connection, EndpointId};
 use std::fmt::Write;
+use std::sync::Arc;
 use thin_status::{ErrorCode, ThinStatus, ThinStatusExt};
 use tokio::sync::{mpsc, watch};
+use tokio::task::JoinHandle;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
 use super::actor::*;
@@ -12,39 +14,60 @@ use crate::error;
 
 #[derive(Debug)]
 pub struct PeerLink {
-    pub connector: IrohConnector,
-    conn_tx: mpsc::Sender<IrohConnection>,
-    watch_rx: watch::Receiver<Option<IrohConnection>>,
-    pub task: tokio::task::JoinHandle<Result<(), ThinStatus>>,
-    _cancellation: DropGuard,
+    connector: IrohConnector,
 }
 
 impl PeerLink {
-    pub fn new(connector: IrohConnector, connect_backoff: impl Backoff + Send + 'static) -> Self {
+    pub fn new(connector: IrohConnector) -> Self {
+        PeerLink { connector }
+    }
+
+    pub fn spawn(
+        self,
+        connect_backoff: impl Backoff + Send + 'static,
+        cancellation: CancellationToken,
+    ) -> (PeerLinkHandle, JoinHandle<Result<(), ThinStatus>>) {
         let (watch_tx, watch_rx) = watch::channel(None);
 
-        let cancellation = CancellationToken::new();
         let drop_guard = cancellation.clone().drop_guard();
 
-        let actor = Actor::new(connector.local.addr().id, connector.peer, watch_tx);
+        let actor = Actor::new(
+            self.connector.local.addr().id,
+            self.connector.peer,
+            watch_tx,
+        );
         let (actor, actor_join) = actor.spawn(cancellation.clone());
-        let outgoing_join =
-            OutgoingConnectLoop::new(connector.clone(), watch_rx.clone(), actor.conn_tx.clone())
-                .spawn(connect_backoff, cancellation);
+        let outgoing_join = OutgoingConnectLoop::new(
+            self.connector.clone(),
+            watch_rx.clone(),
+            actor.conn_tx.clone(),
+        )
+        .spawn(connect_backoff, cancellation);
         let task = tokio::spawn(async move {
             error::await_loop_result(outgoing_join).await?;
             error::await_loop_result(actor_join).await
         });
-        let link = PeerLink {
-            connector,
-            watch_rx,
-            conn_tx: actor.conn_tx,
+        (
+            PeerLinkHandle {
+                actor,
+                connector: self.connector,
+                watch_rx,
+                _cancellation: Arc::new(drop_guard),
+            },
             task,
-            _cancellation: drop_guard,
-        };
-        link
+        )
     }
+}
 
+#[derive(Clone, Debug)]
+pub struct PeerLinkHandle {
+    actor: ActorHandle<IrohConnection>,
+    pub connector: IrohConnector,
+    watch_rx: watch::Receiver<Option<IrohConnection>>,
+    _cancellation: Arc<DropGuard>,
+}
+
+impl PeerLinkHandle {
     /// Returns a `Connection` created by either the `OutgoingConnectLoop` managed internally, or
     /// submitted by `send_incoming`.
     pub fn connection(&self) -> Option<Connection> {
@@ -64,7 +87,7 @@ impl PeerLink {
     /// Returns a receiver object that accepts incoming connections.
     pub fn incoming_receiver(&self) -> IncomingReceiver {
         IncomingReceiver {
-            conn_tx: self.conn_tx.clone(),
+            conn_tx: self.actor.conn_tx.clone(),
             peer_id: self.connector.peer,
         }
     }
