@@ -106,6 +106,39 @@ fn error_kind_str(kind: ErrorKind) -> &'static str {
     }
 }
 
+/// If `result` is `Cancelled`, converts it into a `()`.
+pub fn mask_cancelled(result: Result<(), ThinStatus>) -> Result<(), ThinStatus> {
+    match result {
+        Err(err) if err.code() == Some(ErrorCode::Cancelled) => {
+            tracing::debug!(error = ?err, "Task cancelled");
+            Ok(())
+        }
+        r => r,
+    }
+}
+
+/// If `result` reports a cancelled `JoinError`, it's converted to `Cancelled`.
+/// Any other error (panic) is converted into `Internal`.
+pub fn unwrap_join_handle<T>(
+    result: Result<Result<T, ThinStatus>, tokio::task::JoinError>,
+) -> Result<T, ThinStatus> {
+    match result {
+        Ok(err) => err,
+        Err(join_err) if join_err.is_cancelled() => Err(join_err.error_code(ErrorCode::Cancelled)),
+        Err(join_err) => {
+            tracing::error!(error = ?join_err, "panicked unexpectedly");
+            Err(join_err.error_code(ErrorCode::Internal))
+        }
+    }
+}
+
+/// Awaits `handle` and unwraps its status using `unwrap_join_handle` and `mask_cancelled`.
+pub async fn await_loop_result(
+    handle: tokio::task::JoinHandle<Result<(), ThinStatus>>,
+) -> Result<(), ThinStatus> {
+    mask_cancelled(unwrap_join_handle(handle.await))
+}
+
 #[macro_export]
 macro_rules! check_eq {
     ($left:expr, $right:expr) => {

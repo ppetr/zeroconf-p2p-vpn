@@ -1,6 +1,6 @@
-use std::convert::Infallible;
 use thin_status::{ErrorCode::*, ThinStatus, ThinStatusExt};
 use tokio::sync::{mpsc, watch};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -15,7 +15,7 @@ pub trait ManagedConnection: std::fmt::Debug + Send + Sync + 'static {
     type Key: Ord + Clone;
     /// Allows determining if a connection being closed (reported by `spawn_closed_watcher`) is the
     /// current one.
-    type ConnectionId: PartialEq<Self>;
+    type ConnectionId: PartialEq<Self> + Send;
 
     /// Whether this direction is Incoming or Outgoing.
     fn direction(&self) -> Direction;
@@ -62,7 +62,17 @@ impl<C: ManagedConnection> Actor<C> {
         self.conn_tx.clone()
     }
 
-    pub async fn run(&mut self, cancellation: CancellationToken) -> Result<Infallible, ThinStatus> {
+    pub fn spawn(
+        self,
+        cancellation: CancellationToken,
+    ) -> (ActorHandle<C>, JoinHandle<Result<(), ThinStatus>>) {
+        let watch_rx = self.subscribe();
+        let conn_tx = self.connection_queue();
+        let handle = tokio::spawn(self.run(cancellation));
+        (ActorHandle { watch_rx, conn_tx }, handle)
+    }
+
+    pub async fn run(mut self, cancellation: CancellationToken) -> Result<(), ThinStatus> {
         let _cancel = cancellation.drop_guard_ref();
         let (closed_tx, mut closed_rx) = mpsc::channel(32);
         tracing::info!("Preferred direction: {:?}", self.preferred);
@@ -85,7 +95,11 @@ impl<C: ManagedConnection> Actor<C> {
             // Do not notify the connector as we won't accept any more connections.
             false
         });
-        Err(result)
+        if result.code_or_unknown() == Cancelled {
+            Ok(())
+        } else {
+            Err(result)
+        }
     }
 
     fn handle_connection_candidate(&self, closed_tx: &mpsc::Sender<C::ConnectionId>, new_conn: C) {
@@ -128,6 +142,12 @@ impl<C: ManagedConnection> Actor<C> {
             false
         });
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct ActorHandle<C: ManagedConnection> {
+    pub watch_rx: watch::Receiver<Option<C>>,
+    pub conn_tx: mpsc::Sender<C>,
 }
 
 #[cfg(test)]
@@ -206,20 +226,16 @@ mod tests {
 
     impl TestActor {
         fn new(local_key: isize, remote_key: isize) -> Self {
-            let (watch_tx, watch_rx) = watch::channel(None);
+            let (watch_tx, _watch_rx) = watch::channel(None);
 
             let cancellation = CancellationToken::new();
 
-            let mut actor = Actor::new(local_key, remote_key, watch_tx);
-
-            let sender = actor.connection_queue();
-
-            let cancellation_clone = cancellation.clone();
-            tokio::spawn(async move { actor.run(cancellation_clone).await });
+            let actor = Actor::new(local_key, remote_key, watch_tx);
+            let (handle, _) = actor.spawn(cancellation.clone());
 
             TestActor {
-                sender,
-                receiver: watch_rx,
+                sender: handle.conn_tx,
+                receiver: handle.watch_rx,
                 cancellation,
             }
         }

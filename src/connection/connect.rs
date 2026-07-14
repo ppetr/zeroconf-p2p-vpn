@@ -1,5 +1,4 @@
 use backoff::backoff::Backoff;
-use std::convert::Infallible;
 use thin_status::{ErrorCode::*, ThinStatus, ThinStatusExt};
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
@@ -34,7 +33,7 @@ impl<C: OutgoingConnector> OutgoingConnectLoop<C> {
         mut self,
         retry_backoff: &mut impl Backoff,
         cancellation: CancellationToken,
-    ) -> Result<Infallible, ThinStatus> {
+    ) -> ThinStatus {
         retry_backoff.reset();
         let _cancel = cancellation.drop_guard_ref();
         let err = loop {
@@ -103,7 +102,7 @@ impl<C: OutgoingConnector> OutgoingConnectLoop<C> {
             }
         };
         tracing::info!(error = ?err, "Exiting connector loop");
-        Err(err)
+        err
     }
 }
 
@@ -223,7 +222,7 @@ mod tests {
             cancellation.cancel();
         };
 
-        let (Err(result), _) = tokio::join!(connector_fut, scenario_fut);
+        let (result, _) = tokio::join!(connector_fut, scenario_fut);
         tracing::info!("{}", result);
     }
 
@@ -261,7 +260,7 @@ mod tests {
             drop(watch_tx);
         };
 
-        let (Err(result), _) = tokio::join!(connector_fut, scenario_fut);
+        let (result, _) = tokio::join!(connector_fut, scenario_fut);
         tracing::info!("{}", result);
     }
 
@@ -310,7 +309,7 @@ mod tests {
             drop(watch_tx);
         };
 
-        let (Err(result), _) = tokio::join!(connector_fut, scenario_fut);
+        let (result, _) = tokio::join!(connector_fut, scenario_fut);
         tracing::info!("{}", result);
     }
 }
