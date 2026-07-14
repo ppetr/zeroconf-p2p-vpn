@@ -3,6 +3,8 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::error;
+
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Direction {
     Incoming,
@@ -95,11 +97,7 @@ impl<C: ManagedConnection> Actor<C> {
             // Do not notify the connector as we won't accept any more connections.
             false
         });
-        if result.code_or_unknown() == Cancelled {
-            Ok(())
-        } else {
-            Err(result)
-        }
+        error::mask_cancelled(Err(result))
     }
 
     fn handle_connection_candidate(&self, closed_tx: &mpsc::Sender<C::ConnectionId>, new_conn: C) {

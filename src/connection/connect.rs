@@ -1,13 +1,17 @@
 use backoff::backoff::Backoff;
+use std::future::Future;
 use thin_status::{ErrorCode::*, ThinStatus, ThinStatusExt};
 use tokio::sync::{mpsc, watch};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-pub trait OutgoingConnector {
-    type Connection: Send;
-    type Error: std::fmt::Debug + std::fmt::Display;
+use crate::error;
 
-    async fn connect(&self) -> Result<Self::Connection, Self::Error>;
+pub trait OutgoingConnector: Send + 'static {
+    type Connection: Send + Sync;
+    type Error: std::fmt::Debug + std::fmt::Display + Send;
+
+    fn connect(&self) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send;
 }
 
 pub struct OutgoingConnectLoop<C: OutgoingConnector> {
@@ -29,11 +33,19 @@ impl<C: OutgoingConnector> OutgoingConnectLoop<C> {
         }
     }
 
+    pub fn spawn(
+        self,
+        retry_backoff: impl Backoff + Send + 'static,
+        cancellation: CancellationToken,
+    ) -> JoinHandle<Result<(), ThinStatus>> {
+        tokio::spawn(self.run(retry_backoff, cancellation))
+    }
+
     pub async fn run(
         mut self,
-        retry_backoff: &mut impl Backoff,
+        mut retry_backoff: impl Backoff,
         cancellation: CancellationToken,
-    ) -> ThinStatus {
+    ) -> Result<(), ThinStatus> {
         retry_backoff.reset();
         let _cancel = cancellation.drop_guard_ref();
         let err = loop {
@@ -102,7 +114,7 @@ impl<C: OutgoingConnector> OutgoingConnectLoop<C> {
             }
         };
         tracing::info!(error = ?err, "Exiting connector loop");
-        err
+        error::mask_cancelled(Err(err))
     }
 }
 
@@ -187,13 +199,13 @@ mod tests {
         let (mpsc_tx, mut mpsc_rx) = mpsc::channel(1);
 
         let connector = MockConnector::new(vec![Ok(42)]);
-        let mut backoff = MockBackoff::new(vec![Duration::from_secs(1)]);
+        let backoff = MockBackoff::new(vec![Duration::from_secs(1)]);
         let mut reset_rx = backoff.reset_rx.clone();
 
         let cancellation = CancellationToken::new();
 
         let connector_fut = OutgoingConnectLoop::new(connector, watch_rx.clone(), mpsc_tx)
-            .run(&mut backoff, cancellation.clone());
+            .run(backoff, cancellation.clone());
         let scenario_fut = async {
             // Advance time to trigger the connect attempt after its initial backoff delay
             tokio::time::advance(Duration::from_secs(1)).await;
@@ -223,7 +235,7 @@ mod tests {
         };
 
         let (result, _) = tokio::join!(connector_fut, scenario_fut);
-        tracing::info!("{}", result);
+        tracing::info!("{:?}", result);
     }
 
     #[tokio::test]
@@ -239,11 +251,11 @@ mod tests {
         let (mpsc_tx, _mpsc_rx) = mpsc::channel(1);
 
         let connector = MockConnector::new(vec![Err("Failed")]);
-        let mut backoff = MockBackoff::new(vec![Duration::from_secs(10)]);
+        let backoff = MockBackoff::new(vec![Duration::from_secs(10)]);
         let mut reset_rx = backoff.reset_rx.clone();
 
         let connector_fut = OutgoingConnectLoop::new(connector, watch_rx, mpsc_tx)
-            .run(&mut backoff, CancellationToken::new());
+            .run(backoff, CancellationToken::new());
         let scenario_fut = async {
             // Process the first failure and enter the 10-second backoff sleep
             tokio::time::advance(Duration::from_millis(100)).await;
@@ -261,7 +273,7 @@ mod tests {
         };
 
         let (result, _) = tokio::join!(connector_fut, scenario_fut);
-        tracing::info!("{}", result);
+        tracing::info!("{:?}", result);
     }
 
     #[tokio::test]
@@ -277,12 +289,12 @@ mod tests {
         let (mpsc_tx, mut mpsc_rx) = mpsc::channel(1);
 
         let connector = MockConnector::new(vec![Err("Failed"), Ok(99)]);
-        let mut backoff = MockBackoff::new(vec![Duration::from_secs(10), Duration::from_secs(1)]);
+        let backoff = MockBackoff::new(vec![Duration::from_secs(10), Duration::from_secs(1)]);
         let mut reset_rx = backoff.reset_rx.clone();
 
         let cancellation = CancellationToken::new();
         let connector_fut = OutgoingConnectLoop::new(connector, watch_rx, mpsc_tx)
-            .run(&mut backoff, cancellation.clone());
+            .run(backoff, cancellation.clone());
 
         let scenario_fut = async {
             // Process the first failure and enter the 10-second sleep
@@ -310,6 +322,6 @@ mod tests {
         };
 
         let (result, _) = tokio::join!(connector_fut, scenario_fut);
-        tracing::info!("{}", result);
+        tracing::info!("{:?}", result);
     }
 }

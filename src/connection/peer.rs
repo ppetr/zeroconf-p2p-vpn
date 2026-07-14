@@ -20,10 +20,7 @@ pub struct PeerLink {
 }
 
 impl PeerLink {
-    pub fn new(
-        connector: IrohConnector,
-        mut connect_backoff: impl Backoff + Send + 'static,
-    ) -> Self {
+    pub fn new(connector: IrohConnector, connect_backoff: impl Backoff + Send + 'static) -> Self {
         let (watch_tx, watch_rx) = watch::channel(None);
 
         let cancellation = CancellationToken::new();
@@ -31,11 +28,11 @@ impl PeerLink {
 
         let actor = Actor::new(connector.local.addr().id, connector.peer, watch_tx);
         let (actor, actor_join) = actor.spawn(cancellation.clone());
-        let outgoing =
-            OutgoingConnectLoop::new(connector.clone(), watch_rx.clone(), actor.conn_tx.clone());
+        let outgoing_join =
+            OutgoingConnectLoop::new(connector.clone(), watch_rx.clone(), actor.conn_tx.clone())
+                .spawn(connect_backoff, cancellation);
         let task = tokio::spawn(async move {
-            let (err,) = tokio::join!(outgoing.run(&mut connect_backoff, cancellation));
-            let () = error::mask_cancelled(Err(err))?;
+            error::await_loop_result(outgoing_join).await?;
             error::await_loop_result(actor_join).await
         });
         let link = PeerLink {
