@@ -27,7 +27,7 @@ use crate::tun::packet as tun;
 pub struct CommonPeerConfig {
     pub allowed_networks: Vec<IpNet>,
     pub handshake_timeout: Duration,
-    pub route_table: Arc<net_route::Handle>,
+    pub route_table: route::NetRouteHandle,
     /// `if_index`: The system index of the TUN interface for adding/removing routes.
     tun_if_index: u32,
     own_net: IpNet,
@@ -35,7 +35,7 @@ pub struct CommonPeerConfig {
 
 impl CommonPeerConfig {
     pub fn new(
-        route_table: Arc<net_route::Handle>,
+        route_table: route::NetRouteHandle,
         tun_if_index: u32,
         own_net: IpNet,
     ) -> CommonPeerConfig {

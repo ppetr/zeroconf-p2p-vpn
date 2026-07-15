@@ -45,7 +45,7 @@ async fn main() -> Result<(), anyhow::Error> {
         .install()
         .expect("failed to install Prometheus metrics recorder/exporter");
 
-    let net_route_handle = Arc::new(net_route::Handle::new()?);
+    let net_route_handle = route::NetRouteHandle::new()?;
     let tun = tun::Tun::new(None).await?;
 
     info!("TUN device {} opened.", tun.if_name);
