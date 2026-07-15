@@ -45,10 +45,10 @@ async fn main() -> Result<(), anyhow::Error> {
         .install()
         .expect("failed to install Prometheus metrics recorder/exporter");
 
-    let net_route_handle = route::NetRouteHandle::new()?;
     let tun = tun::Tun::new(None).await?;
-
     info!("TUN device {} opened.", tun.if_name);
+
+    let net_route_handle = route::NetRouteHandle::new(tun.if_index())?;
 
     let args: Vec<String> = std::env::args().collect();
     let args = args.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
@@ -118,7 +118,6 @@ async fn main() -> Result<(), anyhow::Error> {
         };
         let common_config = Arc::new(peer::CommonPeerConfig::new(
             net_route_handle.clone(),
-            tun.if_index(),
             own_net,
         ));
 

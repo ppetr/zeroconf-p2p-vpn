@@ -1,4 +1,4 @@
-use futures_util::FutureExt;
+use futures_util::future::FutureExt;
 use metrics::IntoLabels;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -9,13 +9,52 @@ use crate::error::ExtractedErrorCode;
 #[derive(Clone)]
 pub struct NetRouteHandle {
     pub handle: Arc<net_route::Handle>,
+    if_index: u32,
 }
 
 impl NetRouteHandle {
-    pub fn new() -> Result<Self, std::io::Error> {
-        Ok(Self {
-            handle: Arc::new(net_route::Handle::new()?),
-        })
+    /// Constructs an instance using a newly created `net_route::Handle` and an interface index.
+    pub fn new(if_index: u32) -> Result<Self, std::io::Error> {
+        Ok(Self::from_handle(
+            Arc::new(net_route::Handle::new()?),
+            if_index,
+        ))
+    }
+
+    pub fn from_handle(handle: Arc<net_route::Handle>, if_index: u32) -> Self {
+        Self { handle, if_index }
+    }
+
+    /// Register a route to the stored interface in the system routing table.
+    pub async fn insert(&self, dest_ip: IpAddr) -> Result<(), std::io::Error> {
+        let span = info_span!("p2p_vpn_route_add", %dest_ip, self.if_index);
+
+        let route = self.route_entry(dest_ip);
+        self.handle.add(&route).instrument(span).await?;
+        metrics::gauge!("p2p_vpn_route_add",
+            "ip" => if dest_ip.is_ipv6() { "v6" } else { "v4" })
+        .increment(1);
+        Ok(())
+    }
+
+    /// Unregister a route to the stored interface in the system routing table.
+    pub async fn remove(&self, dest_ip: IpAddr) -> Result<(), std::io::Error> {
+        let span = info_span!("route_del", %dest_ip, self.if_index);
+
+        let route = self.route_entry(dest_ip);
+        self.handle.delete(&route).instrument(span).await?;
+        metrics::gauge!("p2p_vpn_route_route_active",
+            "ip" => if dest_ip.is_ipv6() { "v6" } else { "v4" })
+        .decrement(1);
+        Ok(())
+    }
+
+    fn route_entry(&self, dest_ip: IpAddr) -> net_route::Route {
+        let prefix = match dest_ip {
+            IpAddr::V4(_) => 32,
+            IpAddr::V6(_) => 128,
+        };
+        net_route::Route::new(dest_ip, prefix).with_ifindex(self.if_index)
     }
 }
 
@@ -52,7 +91,6 @@ impl std::hash::Hash for NetRouteHandle {
 #[derive(Debug, PartialEq, Eq)]
 pub struct ScopedRoute {
     handle: NetRouteHandle,
-    if_index: u32,
     dest_ip: IpAddr,
 }
 
@@ -61,67 +99,40 @@ impl ScopedRoute {
     ///
     /// # Arguments
     /// * `handle` - An active [`net_route::Handle`] connection.
-    /// * `if_index` - The system numerical index of the target network interface.
     /// * `dest_ip` - The destination IP address (IPv4 or IPv6) to route.
-    pub async fn new(
-        handle: NetRouteHandle,
-        if_index: u32,
-        dest_ip: IpAddr,
-    ) -> Result<Self, std::io::Error> {
+    pub async fn new(handle: NetRouteHandle, dest_ip: IpAddr) -> Result<Self, std::io::Error> {
         let this = Self {
             handle,
-            if_index,
-            dest_ip,
+            dest_ip: dest_ip.clone(),
         };
-
-        let _span = info_span!("scoped_route_add", %this.dest_ip, this.if_index);
-
-        let route = this.route_entry();
-        this.handle.handle.add(&route).await?;
-        metrics::gauge!("p2p_vpn_route_scoped_route_active",
-            "ip" => if dest_ip.is_ipv6() { "v6" } else { "v4" })
-        .increment(1);
-
+        this.handle.insert(dest_ip).await?;
         Ok(this)
     }
 
-    fn route_entry(&self) -> net_route::Route {
-        let prefix = match self.dest_ip {
-            IpAddr::V4(_) => 32,
-            IpAddr::V6(_) => 128,
-        };
+    pub fn dest_ip(&self) -> &IpAddr {
+        &self.dest_ip
+    }
 
-        net_route::Route::new(self.dest_ip, prefix).with_ifindex(self.if_index)
+    pub async fn drop_async(self) -> Result<(), std::io::Error> {
+        Self::drop_detached(self.handle.clone(), self.dest_ip).await
+    }
+
+    async fn drop_detached(handle: NetRouteHandle, dest_ip: IpAddr) -> Result<(), std::io::Error> {
+        handle.remove(dest_ip).await
     }
 }
 
 impl Drop for ScopedRoute {
     fn drop(&mut self) {
-        let dest_ip = self.dest_ip;
-        let span = info_span!("scoped_route_del", %self.dest_ip, self.if_index);
-
-        let handle = self.handle.clone();
-        let route = self.route_entry();
-
-        tokio::spawn(
-            async move {
-                metrics::gauge!("p2p_vpn_route_scoped_route_active",
-                    "ip" => if dest_ip.is_ipv6() { "v6" } else { "v4" })
-                .decrement(1);
-                handle.handle.delete(&route).await
+        let is_ipv6 = self.dest_ip().is_ipv6();
+        let future = Self::drop_detached(self.handle.clone(), self.dest_ip);
+        tokio::spawn(future.map(move |result| match result {
+            Err(err) => {
+                let mut labels = ExtractedErrorCode::from_io(&err).into_labels();
+                labels.push(metrics::Label::new("ip", if is_ipv6 { "v6" } else { "v4" }));
+                metrics::counter!("scoped_route_cleanup_errors_total", labels).increment(1);
             }
-            .instrument(span)
-            .map(move |result| match result {
-                Err(err) => {
-                    let mut labels = ExtractedErrorCode::from_io(&err).into_labels();
-                    labels.push(metrics::Label::new(
-                        "ip",
-                        if dest_ip.is_ipv6() { "v6" } else { "v4" },
-                    ));
-                    metrics::counter!("scoped_route_cleanup_errors_total", labels).increment(1);
-                }
-                _ => {}
-            }),
-        );
+            _ => {}
+        }));
     }
 }

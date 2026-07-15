@@ -28,22 +28,15 @@ pub struct CommonPeerConfig {
     pub allowed_networks: Vec<IpNet>,
     pub handshake_timeout: Duration,
     pub route_table: route::NetRouteHandle,
-    /// `if_index`: The system index of the TUN interface for adding/removing routes.
-    tun_if_index: u32,
     own_net: IpNet,
 }
 
 impl CommonPeerConfig {
-    pub fn new(
-        route_table: route::NetRouteHandle,
-        tun_if_index: u32,
-        own_net: IpNet,
-    ) -> CommonPeerConfig {
+    pub fn new(route_table: route::NetRouteHandle, own_net: IpNet) -> CommonPeerConfig {
         CommonPeerConfig {
             allowed_networks: vec![IpNet::V6(addr::VPN_IPV6_DEFAULT_ALLOWED)],
             handshake_timeout: Duration::from_mins(1),
             route_table: route_table,
-            tun_if_index,
             own_net,
         }
     }
@@ -231,8 +224,7 @@ impl Peer {
                 routes.clear();
                 for a in addrs {
                     let routing = common.route_table.clone();
-                    let scoped =
-                        route::ScopedRoute::new(routing, common.tun_if_index, a.addr()).await?;
+                    let scoped = route::ScopedRoute::new(routing, a.addr()).await?;
                     routes.push(scoped);
                 }
             }
