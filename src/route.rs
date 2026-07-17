@@ -6,10 +6,47 @@ use tracing::{info_span, Instrument};
 
 use crate::error::ExtractedErrorCode;
 
+pub trait RoutingTable: Clone + Send + Sync + std::fmt::Debug {
+    fn insert(
+        &self,
+        dest_ip: IpAddr,
+    ) -> impl std::future::Future<Output = Result<(), std::io::Error>> + Send;
+    fn remove(
+        &self,
+        dest_ip: IpAddr,
+    ) -> impl std::future::Future<Output = Result<(), std::io::Error>> + Send;
+}
+
 #[derive(Clone)]
 pub struct NetRouteHandle {
     pub handle: Arc<net_route::Handle>,
     if_index: u32,
+}
+
+impl RoutingTable for NetRouteHandle {
+    /// Register a route to the stored interface in the system routing table.
+    async fn insert(&self, dest_ip: IpAddr) -> Result<(), std::io::Error> {
+        let span = info_span!("p2p_vpn_route_add", %dest_ip, self.if_index);
+
+        let route = self.route_entry(dest_ip);
+        self.handle.add(&route).instrument(span).await?;
+        metrics::gauge!("p2p_vpn_route_add",
+            "ip" => if dest_ip.is_ipv6() { "v6" } else { "v4" })
+        .increment(1);
+        Ok(())
+    }
+
+    /// Unregister a route to the stored interface in the system routing table.
+    async fn remove(&self, dest_ip: IpAddr) -> Result<(), std::io::Error> {
+        let span = info_span!("route_del", %dest_ip, self.if_index);
+
+        let route = self.route_entry(dest_ip);
+        self.handle.delete(&route).instrument(span).await?;
+        metrics::gauge!("p2p_vpn_route_route_active",
+            "ip" => if dest_ip.is_ipv6() { "v6" } else { "v4" })
+        .decrement(1);
+        Ok(())
+    }
 }
 
 impl NetRouteHandle {
@@ -23,30 +60,6 @@ impl NetRouteHandle {
 
     pub fn from_handle(handle: Arc<net_route::Handle>, if_index: u32) -> Self {
         Self { handle, if_index }
-    }
-
-    /// Register a route to the stored interface in the system routing table.
-    pub async fn insert(&self, dest_ip: IpAddr) -> Result<(), std::io::Error> {
-        let span = info_span!("p2p_vpn_route_add", %dest_ip, self.if_index);
-
-        let route = self.route_entry(dest_ip);
-        self.handle.add(&route).instrument(span).await?;
-        metrics::gauge!("p2p_vpn_route_add",
-            "ip" => if dest_ip.is_ipv6() { "v6" } else { "v4" })
-        .increment(1);
-        Ok(())
-    }
-
-    /// Unregister a route to the stored interface in the system routing table.
-    pub async fn remove(&self, dest_ip: IpAddr) -> Result<(), std::io::Error> {
-        let span = info_span!("route_del", %dest_ip, self.if_index);
-
-        let route = self.route_entry(dest_ip);
-        self.handle.delete(&route).instrument(span).await?;
-        metrics::gauge!("p2p_vpn_route_route_active",
-            "ip" => if dest_ip.is_ipv6() { "v6" } else { "v4" })
-        .decrement(1);
-        Ok(())
     }
 
     fn route_entry(&self, dest_ip: IpAddr) -> net_route::Route {

@@ -18,6 +18,7 @@ mod error;
 mod osal;
 mod peer;
 mod proto;
+mod relay;
 mod route;
 mod tun;
 
