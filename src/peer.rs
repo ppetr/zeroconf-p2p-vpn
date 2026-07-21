@@ -52,11 +52,13 @@ pub struct PeerConfig {
 #[derive(Clone)]
 pub struct Peer {
     config: PeerConfig,
+    icmp_gateway: tun::IcmpGateway,
 }
 
 impl Peer {
     pub fn new(config: PeerConfig) -> Self {
-        Peer { config }
+        let icmp_gateway = tun::IcmpGateway::from_addr(config.common.own_net.addr());
+        Peer { config, icmp_gateway }
     }
 
     pub fn public_key(&self) -> PublicKey {
@@ -87,49 +89,9 @@ impl Peer {
 
         let control = self.recv_control_loop(routes);
         let send = async {
-            let icmp_gateway = tun::IcmpGateway::from_addr(self.config.common.own_net.addr());
-
             while let Some(packet) = rx_packet.recv().await {
-                // TODO: Check networks etc.
-                if let Some(mtu) = self.config.conn.max_datagram_size() {
-                    if (&packet).len() > mtu {
-                        let mtu = std::cmp::min(mtu, u16::MAX as usize) as u16;
-                        let mut buf = bytes::BytesMut::with_capacity(128);
-                        match icmp_gateway.generate_reply(
-                            &mut buf,
-                            &packet,
-                            tun::IcmpType::packet_too_big(mtu),
-                        ) {
-                            Ok(addr) => {
-                                let buf = tun::TxPacket::new(buf.freeze());
-                                tracing::debug!(packet = ?buf, "Sending ICMP packet to reduce MTU to {}", mtu);
-                                histogram!(description: "ICMP packets to reduce MTU",
-                                    unit: metrics::Unit::Bytes,
-                                    "p2p_vpn_peer_icmp_mtu",
-                                    "ip" => if addr.is_ipv6() { "v6" } else { "v4" },
-                                )
-                                .record(mtu);
-                                let _ = tx_packet.send(buf).await;
-                            }
-                            Err(err) => {
-                                tracing::warn!(error = ?err, key = self.public_key().to_z32());
-                                histogram!(description: "Errors when generating ICMP packets to reduce MTU",
-                                    "p2p_vpn_peer_icmp_mtu_errors", ExtractedErrorCode::from_anyhow(&err)).record(mtu);
-                            }
-                        }
-                        continue;
-                    }
-                }
-                // TODO: Deal with Result
-                let _ = self
-                    .config
-                    .conn
-                    .send_datagram_wait(Bytes::from_owner(packet.data))
-                    .await;
-                histogram!(description: "Total time processing a packet TUN->QUIC (ms)",
-                           unit: metrics::Unit::Milliseconds,
-                           "p2p_vpn_tun_to_quic")
-                .record(tun::elapsed_millis(packet.populated_at));
+                // Process the result.
+                let _ = self.recv_packet(&tx_packet, packet).await;
             }
         };
         let recv = async {
@@ -144,6 +106,52 @@ impl Peer {
             r = recv => r?,
         };
         quin_metrics.abort();
+        Ok(())
+    }
+
+    pub async fn recv_packet(&self, tx_packet: &mpsc::Sender<tun::TxPacket>, packet: tun::RxPacket) -> Result<(), anyhow::Error> {
+        // TODO: Check networks etc.
+        if let Some(mtu) = self.config.conn.max_datagram_size() {
+            if (&packet).len() > mtu {
+                let mtu = std::cmp::min(mtu, u16::MAX as usize) as u16;
+                let mut buf = bytes::BytesMut::with_capacity(128);
+                match self.icmp_gateway.generate_reply(
+                    &mut buf,
+                    &packet,
+                    tun::IcmpType::packet_too_big(mtu),
+                ) {
+                    Ok(addr) => {
+                        let buf = tun::TxPacket::new(buf.freeze());
+                        tracing::debug!(packet = ?buf, "Sending ICMP packet to reduce MTU to {}", mtu);
+                        histogram!(description: "ICMP packets to reduce MTU",
+                            unit: metrics::Unit::Bytes,
+                            "p2p_vpn_peer_icmp_mtu",
+                            "ip" => if addr.is_ipv6() { "v6" } else { "v4" },
+                        )
+                        .record(mtu);
+                        let _ = tx_packet.send(buf).await;
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = ?err, key = self.public_key().to_z32());
+                        histogram!(description: "Errors when generating ICMP packets to reduce MTU",
+                            "p2p_vpn_peer_icmp_mtu_errors", ExtractedErrorCode::from_anyhow(&err)).record(mtu);
+                    }
+                }
+                return Ok(());
+            }
+        }
+        let result = self
+            .config
+            .conn
+            .send_datagram_wait(Bytes::from_owner(packet.data))
+            .await;
+        // TODO: Record the Result in the metric.
+        histogram!(description: "Total time processing a packet TUN->QUIC (ms)",
+                   unit: metrics::Unit::Milliseconds,
+                   "p2p_vpn_tun_to_quic")
+        .record(tun::elapsed_millis(packet.populated_at));
+        // TODO: Assing `ErrorCode` instead of wrapping in `AnyHow` based on the error.
+        result?;
         Ok(())
     }
 

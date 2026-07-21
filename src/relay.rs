@@ -102,7 +102,6 @@ impl<T: Clone + Debug + Send + Sync + 'static, R: RoutingTable> Relay<T, R> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
-    use std::future::Future;
     use std::io::{Error, ErrorKind};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::sync::{Arc, Mutex as StdMutex};
