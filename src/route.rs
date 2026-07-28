@@ -4,9 +4,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use tracing::{info_span, Instrument};
 
-mod ecn;
-
-pub use ecn::*;
+pub mod ecn;
 
 use crate::error::ExtractedErrorCode;
 

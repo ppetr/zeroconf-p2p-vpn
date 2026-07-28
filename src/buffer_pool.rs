@@ -54,7 +54,7 @@ fn report_available(sender: &mpsc::Sender<Box<[u8]>>, capacity_gauge: &metrics::
 /// Holds a buffer together with a reference that'll return it back to the respective
 /// `BufferPool` on destruction.
 pub struct PooledBuffer {
-    /// Preallocated and initialized to a given capacity/
+    /// Preallocated and initialized to given capacity.
     buffer: Box<[u8]>,
     filled_len: usize,
     reclaim: mpsc::WeakSender<Box<[u8]>>,
@@ -137,6 +137,12 @@ impl Deref for PooledBuffer {
     }
 }
 
+impl DerefMut for PooledBuffer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.buffer[..self.filled_len]
+    }
+}
+
 pub struct UpdatingReadBuf<'a> {
     target: &'a mut usize,
     buf: ReadBuf<'a>,
@@ -169,7 +175,7 @@ pub struct PooledSlice {
 }
 
 impl PooledSlice {
-    pub fn clear(self) -> PooledBuffer {
+    pub fn to_buffer(self) -> PooledBuffer {
         self.owned
     }
 }

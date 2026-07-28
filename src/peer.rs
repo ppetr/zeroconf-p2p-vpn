@@ -16,11 +16,13 @@ mod conn_metrics;
 mod validate_addr;
 
 use crate::addr;
+use crate::buffer_pool::PooledSlice;
 use crate::error::ExtractedErrorCode;
 use crate::proto;
 use crate::proto::v1::control_request;
 use crate::proto::v1::ControlRequest;
 use crate::route;
+use crate::route::ecn;
 use crate::tun::packet as tun;
 
 #[derive(Clone)]
@@ -49,18 +51,25 @@ pub struct PeerConfig {
     pub advertise: proto::v1::Advertise,
 }
 
+// TODO: Refactor into the actor pattern other components are using (`communicate` should consume
+// `self` and create a clonable, async handle).
 #[derive(Clone)]
 pub struct Peer {
     config: PeerConfig,
     icmp_gateway: tun::IcmpGateway,
+    max_send_buffer_space: f32,
 }
 
 impl Peer {
+    const ECN_THRESHOLD: f32 = 0.5;
+
     pub fn new(config: PeerConfig) -> Self {
         let icmp_gateway = tun::IcmpGateway::from_addr(config.common.own_net.addr());
+        let max_send_buffer_space = config.conn.datagram_send_buffer_space() as f32;
         Peer {
             config,
             icmp_gateway,
+            max_send_buffer_space,
         }
     }
 
@@ -93,8 +102,11 @@ impl Peer {
         let control = self.recv_control_loop(routes);
         let send = async {
             while let Some(packet) = rx_packet.recv().await {
-                // Process the result.
-                let _ = self.recv_packet(&tx_packet, packet).await;
+                // TODO: Process/record the error part of the result.
+                if let Ok(Some(icmp_packet)) = self.recv_packet(packet) {
+                    // TODO: Process/record the error part of the result.
+                    let _ = tx_packet.send(icmp_packet).await;
+                }
             }
         };
         let recv = async {
@@ -112,12 +124,14 @@ impl Peer {
         Ok(())
     }
 
-    pub async fn recv_packet(
+    /// Send a packet to the peer. If the packet is too large, an ICMP response packet is returned
+    /// instead.
+    pub fn recv_packet(
         &self,
-        tx_packet: &mpsc::Sender<tun::TxPacket>,
         packet: tun::RxPacket,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<Option<tun::TxPacket>, anyhow::Error> {
         // TODO: Check networks etc.
+        // Check the datagram size; if it's larger than the QUIC limit, attempt to negotiate it.
         if let Some(mtu) = self.config.conn.max_datagram_size() {
             if (&packet).len() > mtu {
                 let mtu = std::cmp::min(mtu, u16::MAX as usize) as u16;
@@ -136,7 +150,7 @@ impl Peer {
                             "ip" => if addr.is_ipv6() { "v6" } else { "v4" },
                         )
                         .record(mtu);
-                        let _ = tx_packet.send(buf).await;
+                        return Ok(Some(buf));
                     }
                     Err(err) => {
                         tracing::warn!(error = ?err, key = self.public_key().to_z32());
@@ -144,22 +158,34 @@ impl Peer {
                             "p2p_vpn_peer_icmp_mtu_errors", ExtractedErrorCode::from_anyhow(&err)).record(mtu);
                     }
                 }
-                return Ok(());
+                return Ok(None);
             }
         }
+
+        let populated_at = packet.populated_at;
+        let mut packet = packet.data.to_buffer();
+        // Check the output queue size and drop packets progressively.
+        let fullness =
+            1.0 - self.config.conn.datagram_send_buffer_space() as f32 / self.max_send_buffer_space;
+        if !ecn::linear_aqm(Self::ECN_THRESHOLD, fullness) {
+            if ecn::process_packet_congestion(&mut packet) == ecn::PacketAction::Drop {
+                // TODO: Record this state with a metric.
+                return Ok(None);
+            }
+        }
+
         let result = self
             .config
             .conn
-            .send_datagram_wait(Bytes::from_owner(packet.data))
-            .await;
+            .send_datagram(Bytes::from_owner(PooledSlice::from(packet)));
         // TODO: Record the Result in the metric.
         histogram!(description: "Total time processing a packet TUN->QUIC (ms)",
                    unit: metrics::Unit::Milliseconds,
                    "p2p_vpn_tun_to_quic")
-        .record(tun::elapsed_millis(packet.populated_at));
+        .record(tun::elapsed_millis(populated_at));
         // TODO: Assing `ErrorCode` instead of wrapping in `AnyHow` based on the error.
         result?;
-        Ok(())
+        Ok(None)
     }
 
     /// Returns the set of routes to be passed to the `recv_control_loop`.

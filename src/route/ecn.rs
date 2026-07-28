@@ -4,17 +4,8 @@ use rand;
 /// Packet routing outcome for the VPN engine
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PacketAction {
-    Forward, // Packet is updated with ECN info and is ready to be forwarded.
+    Forward, // Packet (possibly updated with ECN info) and is ready to be forwarded.
     Drop,    // Endpoint lacks ECN support; drop to signal congestion via loss.
-}
-
-impl PacketAction {
-    pub fn and_then(self, action: PacketAction) -> PacketAction {
-        match self {
-            Self::Forward => action,
-            Self::Drop => Self::Drop,
-        }
-    }
 }
 
 /// Evaluates a packet under congestion.
@@ -61,19 +52,17 @@ pub fn process_packet_congestion(packet_buffer: &mut [u8]) -> PacketAction {
 
 /// Simple Linear Advanced Queue Management logic: The more a queue gets full over `threshold`, the
 /// more packet will be dropped in a random fashion.
-pub fn linear_aqm(threshold: f32, fill_ratio: f32) -> PacketAction {
+///
+/// Returns `true` iff an incoming packet should be queued.
+pub fn linear_aqm(threshold: f32, fill_ratio: f32) -> bool {
     linear_aqm_rng(rand::rng(), threshold, fill_ratio)
 }
 
 /// Same as `linar_aqm`, but using a given `rand::Rng` implementation.
-pub fn linear_aqm_rng(mut rng: impl rand::Rng, threshold: f32, fill_ratio: f32) -> PacketAction {
+pub fn linear_aqm_rng(mut rng: impl rand::Rng, threshold: f32, fill_ratio: f32) -> bool {
     if fill_ratio < threshold {
-        return PacketAction::Forward;
+        return true;
     }
     let r: f32 = rng.random();
-    if fill_ratio - threshold > r * (1.0 - threshold) {
-        PacketAction::Drop
-    } else {
-        PacketAction::Forward
-    }
+    fill_ratio - threshold <= r * (1.0 - threshold)
 }
