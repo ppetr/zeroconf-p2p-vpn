@@ -58,7 +58,10 @@ pub struct Peer {
 impl Peer {
     pub fn new(config: PeerConfig) -> Self {
         let icmp_gateway = tun::IcmpGateway::from_addr(config.common.own_net.addr());
-        Peer { config, icmp_gateway }
+        Peer {
+            config,
+            icmp_gateway,
+        }
     }
 
     pub fn public_key(&self) -> PublicKey {
@@ -109,7 +112,11 @@ impl Peer {
         Ok(())
     }
 
-    pub async fn recv_packet(&self, tx_packet: &mpsc::Sender<tun::TxPacket>, packet: tun::RxPacket) -> Result<(), anyhow::Error> {
+    pub async fn recv_packet(
+        &self,
+        tx_packet: &mpsc::Sender<tun::TxPacket>,
+        packet: tun::RxPacket,
+    ) -> Result<(), anyhow::Error> {
         // TODO: Check networks etc.
         if let Some(mtu) = self.config.conn.max_datagram_size() {
             if (&packet).len() > mtu {

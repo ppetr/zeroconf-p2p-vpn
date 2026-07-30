@@ -77,7 +77,7 @@ impl PeerLinkHandle {
     }
 
     /// Waits for a new connection to become available.
-    /// 
+    ///
     /// `None` means that the previous connection has been closed and a new one hasn't been
     /// established yet.
     pub async fn next_connection(&mut self) -> Result<Option<Connection>, watch::error::RecvError> {
