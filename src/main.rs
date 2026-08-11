@@ -103,6 +103,8 @@ async fn main() -> Result<(), anyhow::Error> {
         };
         tun.control(opts).await
     };
+    // TODO: Cancellation.
+    let relay = relay::Relay::new(net_route_handle.clone());
     let connect_loop = async {
         let (own_net, own_net_sig) = addr::generate_signed_ipnet(
             &ipnet::IpNet::V6(addr::VPN_IPV6_DEFAULT_SUBNET0),
@@ -134,10 +136,15 @@ async fn main() -> Result<(), anyhow::Error> {
                 conn,
                 advertise: advertise.clone(),
             };
+
             let mut peer = peer::Peer::new(peer_config);
-            peer.communicate(&mut rx_handle, tx_handle.clone()).await?;
+            let tracker = relay::RoutesTracker::new(&relay, peer.clone());
+            let _ = peer.recv_loop(tx_handle.clone(), tracker).await?;
+            // TODO: tracker.update_routes(&[]).await?;
         })
     };
-    let (_tun_result, _connect_result) = tokio::join!(tun_loop, connect_loop);
+    let tun_rx_loop = async {};
+
+    let _ = tokio::join!(tun_loop, connect_loop, tun_rx_loop);
     Ok(())
 }

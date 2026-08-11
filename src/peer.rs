@@ -6,6 +6,7 @@ use iroh::PublicKey;
 use metrics::*;
 use secure_p2p_transport::wait_for_direct;
 use std::fmt::Write;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 use thin_status::{ErrorCode, ThinStatus};
@@ -13,6 +14,7 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 mod conn_metrics;
+pub mod routes_changed;
 mod validate_addr;
 
 use crate::addr;
@@ -24,8 +26,9 @@ use crate::proto::v1::ControlRequest;
 use crate::route;
 use crate::route::ecn;
 use crate::tun::packet as tun;
+use routes_changed::RoutesChanged;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CommonPeerConfig {
     pub allowed_networks: Vec<IpNet>,
     pub handshake_timeout: Duration,
@@ -44,16 +47,46 @@ impl CommonPeerConfig {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PeerConfig {
     pub common: Arc<CommonPeerConfig>,
     pub conn: Connection,
     pub advertise: proto::v1::Advertise,
 }
 
-// TODO: Refactor into the actor pattern other components are using (`communicate` should consume
+#[derive(Debug)]
+struct RoutesChannel<R: RoutesChanged> {
+    last: Vec<route::ScopedRoute>,
+    notify: R,
+}
+
+impl<R: RoutesChanged> RoutesChannel<R> {
+    pub fn new(notify: R) -> Self {
+        Self {
+            last: Vec::new(),
+            notify,
+        }
+    }
+
+    pub fn last(&self) -> &[route::ScopedRoute] {
+        self.last.deref()
+    }
+
+    pub async fn publish(&mut self, routes: Vec<route::ScopedRoute>) -> Result<(), ThinStatus> {
+        let mut addrs = Vec::new();
+        addrs.reserve(routes.len());
+        for route in &routes {
+            addrs.push(route.dest_ip().clone());
+        }
+        self.notify.update_routes(addrs.deref()).await?;
+        self.last = routes;
+        Ok(())
+    }
+}
+
+// TODO: Refactor into the actor pattern other components are using (`recv_loop` should consume
 // `self` and create a clonable, async handle).
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Peer {
     config: PeerConfig,
     icmp_gateway: tun::IcmpGateway,
@@ -77,12 +110,13 @@ impl Peer {
         self.config.conn.remote_id()
     }
 
-    pub async fn communicate(
+    pub async fn recv_loop(
         &mut self,
-        rx_packet: &mut mpsc::Receiver<tun::RxPacket>,
         tx_packet: mpsc::Sender<tun::TxPacket>,
+        route_changes: impl RoutesChanged,
     ) -> Result<()> {
-        let routes = self.handshake().await?;
+        let mut routes_channel = RoutesChannel::new(route_changes);
+        self.handshake(&mut routes_channel).await?;
         // Main loop. -------
         tracing::info!(
             peer = self.public_key().to_z32(),
@@ -99,16 +133,7 @@ impl Peer {
         )])
         .spawn_exporter(self.config.conn.clone(), Duration::from_secs(5));
 
-        let control = self.recv_control_loop(routes);
-        let send = async {
-            while let Some(packet) = rx_packet.recv().await {
-                // TODO: Process/record the error part of the result.
-                if let Ok(Some(icmp_packet)) = self.recv_packet(packet) {
-                    // TODO: Process/record the error part of the result.
-                    let _ = tx_packet.send(icmp_packet).await;
-                }
-            }
-        };
+        let control = self.recv_control_loop(routes_channel);
         let recv = async {
             Ok::<(), Error>(loop {
                 let bytes = self.config.conn.read_datagram().await?;
@@ -117,7 +142,6 @@ impl Peer {
         };
         tokio::select! {
             r = control => r?,
-            r = send => r,
             r = recv => r?,
         };
         quin_metrics.abort();
@@ -189,16 +213,15 @@ impl Peer {
     }
 
     /// Returns the set of routes to be passed to the `recv_control_loop`.
-    async fn handshake(&self) -> Result<Vec<route::ScopedRoute>> {
+    async fn handshake<R: RoutesChanged>(&self, mut routes: &mut RoutesChannel<R>) -> Result<()> {
         wait_for_direct(&self.config.conn).await?;
         let handshake = async {
             let send = self.send_advertise();
-            let mut routes = Vec::new();
             let receive = self.recv_control(&mut routes);
             let (send, receive) = tokio::join!(send, receive);
             send?;
             receive?;
-            Ok::<_, Error>(routes)
+            Ok::<_, Error>(())
         };
         let (handshake,) = tokio::join!(timeout(self.config.common.handshake_timeout, handshake));
         handshake.context(format!(
@@ -228,7 +251,7 @@ impl Peer {
     /// Waits for a single control message and processes it.
     ///
     /// Returns an error if as the result the connection is closed.
-    async fn recv_control(&self, routes: &mut Vec<route::ScopedRoute>) -> Result<()> {
+    async fn recv_control<R: RoutesChanged>(&self, routes: &mut RoutesChannel<R>) -> Result<()> {
         let _span = tracing::debug_span!(
             "recv_control",
             peer = self.public_key().to_z32(),
@@ -244,10 +267,10 @@ impl Peer {
     }
 
     /// Returns an error iff the connection should be disconnected.
-    async fn handle_control_request(
+    async fn handle_control_request<R: RoutesChanged>(
         &self,
         request: &ControlRequest,
-        routes: &mut Vec<route::ScopedRoute>,
+        routes_channel: &mut RoutesChannel<R>,
     ) -> Result<(), ThinStatus> {
         let mut addr_errors = Vec::new();
         match &request.command {
@@ -262,16 +285,17 @@ impl Peer {
                     addr_errors = errors;
                 }
                 let common = &self.config.common;
-                routes.clear();
+                let mut new_routes = Vec::new();
                 for a in addrs {
                     let routing = common.route_table.clone();
                     let scoped = route::ScopedRoute::new(routing, a.addr()).await?;
-                    routes.push(scoped);
+                    new_routes.push(scoped);
                 }
+                routes_channel.publish(new_routes).await?;
             }
             None => (),
         };
-        if routes.is_empty() {
+        if routes_channel.last.is_empty() {
             let mut status = ThinStatus::builder(ErrorCode::FailedPrecondition);
             let _ = write!(status, "No available routes to the peer; {:?}", addr_errors);
             let status = status.build();
@@ -281,7 +305,10 @@ impl Peer {
         Ok(())
     }
 
-    async fn recv_control_loop(&self, mut routes: Vec<route::ScopedRoute>) -> Result<()> {
+    async fn recv_control_loop<R: RoutesChanged>(
+        &self,
+        mut routes: RoutesChannel<R>,
+    ) -> Result<()> {
         loop {
             self.recv_control(&mut routes).await?;
         }

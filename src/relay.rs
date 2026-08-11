@@ -10,7 +10,7 @@ use crate::error::ExtractedErrorCode;
 use crate::route::{NetRouteHandle, RoutingTable};
 
 #[derive(Clone, Debug)]
-pub struct PeerValue<T>(T);
+struct PeerValue<T>(T);
 
 /// Keeps a list of values (peers) in a sharded map (`DashMap`) indexed by `IpAddr`.
 #[derive(Debug)]
@@ -39,10 +39,11 @@ impl<T: Clone + Debug + Send + Sync + 'static, R: RoutingTable> Relay<T, R> {
         self.peer_map.get_mut(dest_ip).map(|e| e.value().0.clone())
     }
 
-    pub async fn insert(&self, dest_ips: &[IpAddr], value: PeerValue<T>) -> Result<(), ThinStatus> {
+    pub async fn insert(&self, dest_ips: &[IpAddr], value: T) -> Result<(), ThinStatus> {
         let _span = tracing::info_span!("p2p_vpn_relay_insert");
         let locked = self.handle.lock().await;
         let locked = &locked;
+        let value = PeerValue(value);
         let value_ref = &value;
         let result = try_join_all(dest_ips.into_iter().map(|ip| async move {
             let result = locked.insert((*ip).clone()).await;
@@ -79,7 +80,7 @@ impl<T: Clone + Debug + Send + Sync + 'static, R: RoutingTable> Relay<T, R> {
             .await
     }
 
-    pub async fn remove_locked(&self, locked: &MutexGuard<'_, R>, dest_ips: &[IpAddr]) {
+    async fn remove_locked(&self, locked: &MutexGuard<'_, R>, dest_ips: &[IpAddr]) {
         for ip in dest_ips {
             self.peer_map.remove(ip);
         }
@@ -163,7 +164,7 @@ mod tests {
         let relay = Relay::new(mock_handle.clone());
 
         let ip = ip4(192, 168, 1, 10);
-        let peer_val = PeerValue("peer_1".to_string());
+        let peer_val = "peer_1".to_string();
 
         let ips = vec![ip];
         let result = relay.insert(&ips, peer_val.clone()).await;
@@ -184,7 +185,7 @@ mod tests {
         let ip1 = ip4(10, 0, 0, 1);
         let ip2 = ip4(10, 0, 0, 2);
         let ip3 = ip6(0x2001, 0xdb8);
-        let peer_val = PeerValue(42);
+        let peer_val = 42;
 
         let ips = vec![ip1, ip2, ip3];
         let result = relay.insert(&ips, peer_val).await;
@@ -215,7 +216,7 @@ mod tests {
 
         let ip1 = ip4(192, 168, 10, 1);
         let ip2 = ip4(192, 168, 10, 2);
-        let peer_val = PeerValue("node_alpha".to_string());
+        let peer_val = "node_alpha".to_string();
 
         let ips = vec![ip1, ip2];
         relay.insert(&ips, peer_val).await.unwrap();
@@ -253,8 +254,8 @@ mod tests {
         let relay = Relay::new(mock_handle);
 
         let ip = ip4(192, 168, 100, 5);
-        let peer_val1 = PeerValue("initial_peer".to_string());
-        let peer_val2 = PeerValue("updated_peer".to_string());
+        let peer_val1 = "initial_peer".to_string();
+        let peer_val2 = "updated_peer".to_string();
 
         let ips = vec![ip];
         relay.insert(&ips, peer_val1).await.unwrap();
@@ -276,7 +277,7 @@ mod tests {
         // Force the mock routing table to fail on route insertion
         mock_handle.set_fail(true);
 
-        let result = relay.insert(&ips, PeerValue("fail_node".to_string())).await;
+        let result = relay.insert(&ips, "fail_node".to_string()).await;
 
         assert!(
             result.is_err(),
@@ -300,7 +301,7 @@ mod tests {
         let relay = Arc::new(Relay::new(mock_handle.clone()));
 
         let ip = ip4(10, 1, 1, 1);
-        let peer_val = PeerValue("concurrent_node".to_string());
+        let peer_val = "concurrent_node".to_string();
 
         let relay_clone = Arc::clone(&relay);
 
@@ -323,5 +324,42 @@ mod tests {
         assert!(writer_res.unwrap().is_ok());
         assert_eq!(relay.get(&ip), Some("concurrent_node".to_string()));
         assert!(mock_handle.has_route(&ip));
+    }
+}
+
+#[derive(Debug)]
+pub struct RoutesTracker<'a, T: Clone + Debug + Send + Sync + 'static> {
+    relay: &'a Relay<T>,
+    value: T,
+    last: Vec<std::net::IpAddr>,
+}
+
+impl<'a, T: Clone + Debug + Send + Sync + 'static> RoutesTracker<'a, T> {
+    pub fn new(relay: &'a Relay<T>, value: T) -> Self {
+        Self {
+            relay,
+            value,
+            last: Vec::new(),
+        }
+    }
+}
+
+impl<'a, T: Clone + Debug + Send + Sync + 'static> crate::peer::routes_changed::RoutesChanged
+    for RoutesTracker<'a, T>
+{
+    async fn update_routes(&mut self, routes: &[std::net::IpAddr]) -> Result<(), ThinStatus> {
+        self.relay.remove(self.last.as_ref()).await;
+        self.last.clear();
+        self.relay.insert(routes, self.value.clone()).await?;
+        self.last = routes.to_vec();
+        Ok(())
+    }
+}
+
+impl<'a, T: Clone + Debug + Send + Sync + 'static> Drop for RoutesTracker<'a, T> {
+    fn drop(&mut self) {
+        if !self.last.is_empty() {
+            panic!("Routes not removed: {:?}", self.last);
+        }
     }
 }
