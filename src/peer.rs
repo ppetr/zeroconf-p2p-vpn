@@ -6,15 +6,15 @@ use iroh::PublicKey;
 use metrics::*;
 use secure_p2p_transport::wait_for_direct;
 use std::fmt::Write;
-use std::ops::Deref;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use thin_status::{ErrorCode, ThinStatus};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 
 mod conn_metrics;
-pub mod routes_changed;
 mod validate_addr;
 
 use crate::addr;
@@ -23,25 +23,21 @@ use crate::error::ExtractedErrorCode;
 use crate::proto;
 use crate::proto::v1::control_request;
 use crate::proto::v1::ControlRequest;
-use crate::route;
 use crate::route::ecn;
 use crate::tun::packet as tun;
-use routes_changed::RoutesChanged;
 
 #[derive(Clone, Debug)]
 pub struct CommonPeerConfig {
     pub allowed_networks: Vec<IpNet>,
     pub handshake_timeout: Duration,
-    pub route_table: route::NetRouteHandle,
     own_net: IpNet,
 }
 
 impl CommonPeerConfig {
-    pub fn new(route_table: route::NetRouteHandle, own_net: IpNet) -> CommonPeerConfig {
+    pub fn new(own_net: IpNet) -> CommonPeerConfig {
         CommonPeerConfig {
             allowed_networks: vec![IpNet::V6(addr::VPN_IPV6_DEFAULT_ALLOWED)],
             handshake_timeout: Duration::from_mins(1),
-            route_table: route_table,
             own_net,
         }
     }
@@ -54,38 +50,9 @@ pub struct PeerConfig {
     pub advertise: proto::v1::Advertise,
 }
 
-#[derive(Debug)]
-struct RoutesChannel<R: RoutesChanged> {
-    last: Vec<route::ScopedRoute>,
-    notify: R,
-}
+#[derive(Clone, Debug)]
+pub struct RoutesChanged(pub Vec<IpAddr>);
 
-impl<R: RoutesChanged> RoutesChannel<R> {
-    pub fn new(notify: R) -> Self {
-        Self {
-            last: Vec::new(),
-            notify,
-        }
-    }
-
-    pub fn last(&self) -> &[route::ScopedRoute] {
-        self.last.deref()
-    }
-
-    pub async fn publish(&mut self, routes: Vec<route::ScopedRoute>) -> Result<(), ThinStatus> {
-        let mut addrs = Vec::new();
-        addrs.reserve(routes.len());
-        for route in &routes {
-            addrs.push(route.dest_ip().clone());
-        }
-        self.notify.update_routes(addrs.deref()).await?;
-        self.last = routes;
-        Ok(())
-    }
-}
-
-// TODO: Refactor into the actor pattern other components are using (`recv_loop` should consume
-// `self` and create a clonable, async handle).
 #[derive(Clone, Debug)]
 pub struct Peer {
     config: PeerConfig,
@@ -110,50 +77,8 @@ impl Peer {
         self.config.conn.remote_id()
     }
 
-    pub async fn recv_loop(
-        &mut self,
-        tx_packet: mpsc::Sender<tun::TxPacket>,
-        route_changes: impl RoutesChanged,
-    ) -> Result<()> {
-        let mut routes_channel = RoutesChannel::new(route_changes);
-        self.handshake(&mut routes_channel).await?;
-        // Main loop. -------
-        tracing::info!(
-            peer = self.public_key().to_z32(),
-            "Handshake successfully completed"
-        );
-        counter!(description: "Successful handshakes", "p2p_vpn_peer_handshakes").increment(1);
-
-        // This is fine if the number of peers is low. Should there be a lot (hundreds or
-        // thousands), then having too high cardinality of this metric could start to be
-        // problematic.
-        let quin_metrics = conn_metrics::QuinnMetrics::new(vec![metrics::Label::new(
-            "peer",
-            self.public_key().to_z32(),
-        )])
-        .spawn_exporter(self.config.conn.clone(), Duration::from_secs(5));
-
-        let control = self.recv_control_loop(routes_channel);
-        let recv = async {
-            Ok::<(), Error>(loop {
-                let bytes = self.config.conn.read_datagram().await?;
-                tx_packet.send(tun::TxPacket::new(bytes)).await?;
-            })
-        };
-        tokio::select! {
-            r = control => r?,
-            r = recv => r?,
-        };
-        quin_metrics.abort();
-        Ok(())
-    }
-
-    /// Send a packet to the peer. If the packet is too large, an ICMP response packet is returned
-    /// instead.
-    pub fn recv_packet(
-        &self,
-        packet: tun::RxPacket,
-    ) -> Result<Option<tun::TxPacket>, anyhow::Error> {
+    /// See `ConnectedPeer::send_packet`.
+    fn send_packet(&self, packet: tun::RxPacket) -> Result<Option<tun::TxPacket>, anyhow::Error> {
         // TODO: Check networks etc.
         // Check the datagram size; if it's larger than the QUIC limit, attempt to negotiate it.
         if let Some(mtu) = self.config.conn.max_datagram_size() {
@@ -212,22 +137,32 @@ impl Peer {
         Ok(None)
     }
 
-    /// Returns the set of routes to be passed to the `recv_control_loop`.
-    async fn handshake<R: RoutesChanged>(&self, mut routes: &mut RoutesChannel<R>) -> Result<()> {
+    /// Returns the set of routes negotiated as part of the handshake.
+    pub async fn handshake(self) -> Result<(ConnectedPeer, RoutesChanged)> {
         wait_for_direct(&self.config.conn).await?;
         let handshake = async {
             let send = self.send_advertise();
-            let receive = self.recv_control(&mut routes);
+            let receive = self.recv_control();
             let (send, receive) = tokio::join!(send, receive);
             send?;
-            receive?;
-            Ok::<_, Error>(())
+            Ok::<_, Error>(receive?)
         };
         let (handshake,) = tokio::join!(timeout(self.config.common.handshake_timeout, handshake));
-        handshake.context(format!(
+        let handshake = handshake.context(format!(
             "Failed to finish handshake within the deadline {:?}",
             self.config.common.handshake_timeout
-        ))?
+        ))??;
+        let routes = match handshake {
+            Some(routes) => routes,
+            None => anyhow::bail!("Handshake returned no routes"),
+        };
+        // TODO: Track also unsuccessful handshakes.
+        tracing::info!(
+            peer = self.public_key().to_z32(),
+            "Handshake successfully completed"
+        );
+        counter!(description: "Successful handshakes", "p2p_vpn_peer_handshakes").increment(1);
+        Ok((ConnectedPeer { peer: self }, routes))
     }
 
     /// Sends an Advertise handshake.
@@ -251,7 +186,7 @@ impl Peer {
     /// Waits for a single control message and processes it.
     ///
     /// Returns an error if as the result the connection is closed.
-    async fn recv_control<R: RoutesChanged>(&self, routes: &mut RoutesChannel<R>) -> Result<()> {
+    async fn recv_control(&self) -> Result<Option<RoutesChanged>> {
         let _span = tracing::debug_span!(
             "recv_control",
             peer = self.public_key().to_z32(),
@@ -260,18 +195,18 @@ impl Peer {
         counter!(description: "Received v1::ControlRequest messages",
                  "p2p_vpn_peer_recv_control_message")
         .increment(1);
-        Ok(proto::read_control(&self.config.conn, async |r| {
-            self.handle_control_request(&r, routes).await
+        let routes = proto::read_control(&self.config.conn, async |r| {
+            self.handle_control_request(&r).await
         })
-        .await?)
+        .await?;
+        Ok(routes)
     }
 
     /// Returns an error iff the connection should be disconnected.
-    async fn handle_control_request<R: RoutesChanged>(
+    async fn handle_control_request(
         &self,
         request: &ControlRequest,
-        routes_channel: &mut RoutesChannel<R>,
-    ) -> Result<(), ThinStatus> {
+    ) -> Result<Option<RoutesChanged>, ThinStatus> {
         let mut addr_errors = Vec::new();
         match &request.command {
             Some(control_request::Command::Advertise(a)) => {
@@ -284,34 +219,23 @@ impl Peer {
                     tracing::info!(peer = self.public_key().to_z32(), errors = ?errors, "Errors parsing peer addresses");
                     addr_errors = errors;
                 }
-                let common = &self.config.common;
                 let mut new_routes = Vec::new();
+                new_routes.reserve(addrs.len());
                 for a in addrs {
-                    let routing = common.route_table.clone();
-                    let scoped = route::ScopedRoute::new(routing, a.addr()).await?;
-                    new_routes.push(scoped);
+                    new_routes.push(a.addr());
                 }
-                routes_channel.publish(new_routes).await?;
+                if new_routes.is_empty() {
+                    let mut status = ThinStatus::builder(ErrorCode::FailedPrecondition);
+                    let _ = write!(status, "No available routes to the peer; {:?}", addr_errors);
+                    let status = status.build();
+                    self.send_disconnect(&status);
+                    return Err(status);
+                }
+                return Ok(Some(RoutesChanged(new_routes)));
             }
             None => (),
         };
-        if routes_channel.last.is_empty() {
-            let mut status = ThinStatus::builder(ErrorCode::FailedPrecondition);
-            let _ = write!(status, "No available routes to the peer; {:?}", addr_errors);
-            let status = status.build();
-            self.send_disconnect(&status);
-            return Err(status);
-        }
-        Ok(())
-    }
-
-    async fn recv_control_loop<R: RoutesChanged>(
-        &self,
-        mut routes: RoutesChannel<R>,
-    ) -> Result<()> {
-        loop {
-            self.recv_control(&mut routes).await?;
-        }
+        Ok(None)
     }
 
     fn send_disconnect(&self, status: &ThinStatus) {
@@ -319,5 +243,62 @@ impl Peer {
             VarInt::from_u32(i32::from(status.code_raw()) as u32),
             status.message().as_bytes(),
         )
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ConnectedPeer {
+    peer: Peer,
+}
+
+impl ConnectedPeer {
+    pub fn public_key(&self) -> PublicKey {
+        self.peer.public_key()
+    }
+
+    /// Receive packets from this peer and pass them to `tx_packet`.
+    pub async fn recv_loop(&mut self, tx_packet: mpsc::Sender<tun::TxPacket>) -> Result<()> {
+        let cancel = CancellationToken::new();
+        // This is fine if the number of peers is low. Should there be a lot (hundreds or
+        // thousands), then having too high cardinality of this metric could start to be
+        // problematic.
+        let _quinn_metrics = conn_metrics::QuinnMetrics::new(vec![metrics::Label::new(
+            "peer",
+            self.public_key().to_z32(),
+        )])
+        .spawn_exporter(
+            self.peer.config.conn.clone(),
+            Duration::from_secs(5),
+            cancel.clone(),
+        );
+        let _drop_guard = cancel.drop_guard();
+
+        loop {
+            let bytes = self.peer.config.conn.read_datagram().await?;
+            tx_packet.send(tun::TxPacket::new(bytes)).await?;
+        }
+    }
+
+    /// Send a packet to the peer. If the packet is too large, an ICMP response packet is returned
+    /// to the caller instead.
+    ///
+    /// This method is synchronous: If the Quinn connection can't handle the packet, a
+    /// corresponding ICMP packet is returned instead (or dropped, if the sender doesn't support
+    /// it).
+    pub fn send_packet(
+        &self,
+        packet: tun::RxPacket,
+    ) -> Result<Option<tun::TxPacket>, anyhow::Error> {
+        self.peer.send_packet(packet)
+    }
+
+    /// Processes control messages until one that updates routing is received.
+    pub async fn recv_control_loop(&self) -> Result<RoutesChanged> {
+        loop {
+            match self.peer.recv_control().await? {
+                Some(routes) => return Ok(routes),
+                None => (),
+            }
+        }
     }
 }

@@ -8,7 +8,7 @@ pub mod ecn;
 
 use crate::error::ExtractedErrorCode;
 
-pub trait RoutingTable: Clone + Send + Sync + std::fmt::Debug {
+pub trait RoutingTable: Clone + Send + Sync + std::fmt::Debug + 'static {
     fn insert(
         &self,
         dest_ip: IpAddr,
@@ -104,18 +104,18 @@ impl std::hash::Hash for NetRouteHandle {
 /// provided network interface index. When the instance falls out of scope, a background thread
 /// automatically deletes the route from the OS routing table.
 #[derive(Debug, PartialEq, Eq)]
-pub struct ScopedRoute {
-    handle: NetRouteHandle,
+pub struct ScopedRoute<R: RoutingTable> {
+    handle: R,
     dest_ip: IpAddr,
 }
 
-impl ScopedRoute {
+impl<R: RoutingTable> ScopedRoute<R> {
     /// Constructs a new `ScopedRoute` and immediately registers it with the system routing table.
     ///
     /// # Arguments
     /// * `handle` - An active [`net_route::Handle`] connection.
     /// * `dest_ip` - The destination IP address (IPv4 or IPv6) to route.
-    pub async fn new(handle: NetRouteHandle, dest_ip: IpAddr) -> Result<Self, std::io::Error> {
+    pub async fn new(handle: R, dest_ip: IpAddr) -> Result<Self, std::io::Error> {
         let this = Self {
             handle,
             dest_ip: dest_ip.clone(),
@@ -132,12 +132,12 @@ impl ScopedRoute {
         Self::drop_detached(self.handle.clone(), self.dest_ip).await
     }
 
-    async fn drop_detached(handle: NetRouteHandle, dest_ip: IpAddr) -> Result<(), std::io::Error> {
+    async fn drop_detached(handle: R, dest_ip: IpAddr) -> Result<(), std::io::Error> {
         handle.remove(dest_ip).await
     }
 }
 
-impl Drop for ScopedRoute {
+impl<R: RoutingTable> Drop for ScopedRoute<R> {
     fn drop(&mut self) {
         let is_ipv6 = self.dest_ip().is_ipv6();
         let future = Self::drop_detached(self.handle.clone(), self.dest_ip);

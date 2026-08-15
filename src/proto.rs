@@ -6,7 +6,7 @@ use metrics::*;
 use prost::Message;
 use std::fmt::Debug;
 use std::num::NonZeroI32;
-use thin_status::{ErrorCode::*, ThinStatus};
+use thin_status::{ErrorCode::*, ThinStatus, ThinStatusExt};
 
 use crate::error::ExtractedErrorCode;
 
@@ -43,11 +43,14 @@ pub fn control_to_status(response: v1::ControlResponse) -> Result<(), ThinStatus
 }
 
 /// Wait for an unidirectional stream and accept a `v1::ControlRequest` message from it.
-pub async fn read_control<F>(conn: &Connection, f: F) -> Result<()>
+pub async fn read_control<F, R>(conn: &Connection, f: F) -> Result<R, ThinStatus>
 where
-    F: AsyncFnOnce(v1::ControlRequest) -> Result<(), ThinStatus>,
+    F: AsyncFnOnce(v1::ControlRequest) -> Result<R, ThinStatus>,
 {
-    let (send, mut recv) = conn.accept_bi().await?;
+    let (send, mut recv) = conn
+        .accept_bi()
+        .await
+        .map_err(|e| e.error_code(FailedPrecondition))?;
     let request = match read_control_stream(&mut recv).await {
         Err(e) => {
             let e = e.context("Received a malformed message from the peer");
@@ -55,16 +58,19 @@ where
             counter!(description: "Received malformed v1::ControlRequest messages",
                 "p2p_vpn_proto_read_control_message_errors", ExtractedErrorCode::from_anyhow(&e))
             .increment(1);
-            return Err(e);
+            return Err(e.error_code(DataLoss));
         }
         Ok(r) => r,
     };
     let response = f(request).await;
-    let response: v1::ControlResponse = match response {
-        Ok(()) => Default::default(),
-        Err(status) => status_to_control(status),
+    let control_response: v1::ControlResponse = match &response {
+        Ok(_) => Default::default(),
+        Err(status) => status_to_control(status.clone()),
     };
-    write_control_stream(send, &response).await
+    write_control_stream(send, &control_response)
+        .await
+        .map_err(|e| e.error_code(Aborted))?;
+    response
 }
 
 async fn read_control_stream<P: Message + Debug + Default>(stream: &mut RecvStream) -> Result<P> {

@@ -89,6 +89,15 @@ pub fn inet_slice<'a>(slice: &'a (impl AsRef<[u8]> + ?Sized)) -> Result<Internet
         })
 }
 
+/// Extracts the destination IP address from a slice.
+pub fn destination_ip(internet_slice: &InternetSlice) -> Option<IpAddr> {
+    match internet_slice {
+        InternetSlice::Ipv4(ipv4_slice) => Some(IpAddr::V4(ipv4_slice.header().destination_addr())),
+        InternetSlice::Ipv6(ipv6_slice) => Some(IpAddr::V6(ipv6_slice.header().destination_addr())),
+        InternetSlice::Arp(_) => None,
+    }
+}
+
 /// TODO
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct IcmpGateway {

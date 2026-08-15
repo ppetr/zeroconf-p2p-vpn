@@ -3,6 +3,7 @@ use metrics::{gauge, Gauge, Label, Unit};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::interval;
+use tokio_util::sync::CancellationToken;
 
 pub struct QuinnMetrics {
     pub datagram_tx: Gauge,
@@ -93,11 +94,19 @@ impl QuinnMetrics {
     /// Spawns a background loop that periodically records metrics from a Quinn Connection.
     ///
     /// Returns a `tokio::task::JoinHandle<()>` which can be used to abort or monitor the loop.
-    pub fn spawn_exporter(self, connection: Connection, period: Duration) -> JoinHandle<()> {
+    pub fn spawn_exporter(
+        self,
+        connection: Connection,
+        period: Duration,
+        cancel: CancellationToken,
+    ) -> JoinHandle<()> {
         tokio::spawn(async move {
             let mut ticker = interval(period);
             loop {
-                ticker.tick().await;
+                tokio::select! {
+                    _ = ticker.tick() => (),
+                    _ = cancel.cancelled() => break,
+                };
                 if let Some(reason) = connection.close_reason() {
                     tracing::debug!(reason = ?reason, "Connection closed, stopping metrics exporter");
                     break;

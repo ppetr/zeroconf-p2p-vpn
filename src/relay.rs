@@ -7,10 +7,13 @@ use thin_status::ThinStatus;
 use tokio::sync::{Mutex, MutexGuard};
 
 use crate::error::ExtractedErrorCode;
-use crate::route::{NetRouteHandle, RoutingTable};
+use crate::route::{NetRouteHandle, RoutingTable, ScopedRoute};
 
-#[derive(Clone, Debug)]
-struct PeerValue<T>(T);
+#[derive(Debug)]
+struct PeerValue<T, R: RoutingTable + 'static = NetRouteHandle> {
+    value: T,
+    _route: ScopedRoute<R>,
+}
 
 /// Keeps a list of values (peers) in a sharded map (`DashMap`) indexed by `IpAddr`.
 #[derive(Debug)]
@@ -18,7 +21,7 @@ pub struct Relay<T: Clone + Debug, R: RoutingTable = NetRouteHandle> {
     // TODO: Use some clever async single-flight mechanism to just combine requests to each IP
     // address and run their requests in parallel.
     handle: Mutex<R>,
-    peer_map: DashMap<IpAddr, PeerValue<T>>,
+    peer_map: DashMap<IpAddr, PeerValue<T, R>>,
 }
 
 impl<T: Clone + Debug + Send + Sync + 'static, R: RoutingTable> Relay<T, R> {
@@ -36,32 +39,40 @@ impl<T: Clone + Debug + Send + Sync + 'static, R: RoutingTable> Relay<T, R> {
     ///
     /// Optimized for performance so that it can be efficiently called for each incoming TUN packet.
     pub fn get(&self, dest_ip: &IpAddr) -> Option<T> {
-        self.peer_map.get_mut(dest_ip).map(|e| e.value().0.clone())
+        self.peer_map
+            .get_mut(dest_ip)
+            .map(|e| e.value().value.clone())
     }
 
     pub async fn insert(&self, dest_ips: &[IpAddr], value: T) -> Result<(), ThinStatus> {
         let _span = tracing::info_span!("p2p_vpn_relay_insert");
         let locked = self.handle.lock().await;
         let locked = &locked;
-        let value = PeerValue(value);
         let value_ref = &value;
         let result = try_join_all(dest_ips.into_iter().map(|ip| async move {
-            let result = locked.insert((*ip).clone()).await;
-            if let Err(err) = &result {
-                tracing::error!(error = ?err, dest_ip = ?ip, peer = ?value_ref,
-                    "Errors inserting route to the system routing tables");
+            let result = ScopedRoute::new((*locked).clone(), (*ip).clone()).await;
+            match result {
+                Err(err) => {
+                    tracing::error!(error = ?err, dest_ip = ?ip, peer = ?value_ref.clone(),
+                                    "Errors inserting route to the system routing tables");
+                    Err(err)
+                }
+                Ok(scoped) => {
+                    self.peer_map.insert(
+                        (*ip).clone(),
+                        PeerValue {
+                            value: value_ref.clone(),
+                            _route: scoped,
+                        },
+                    );
+                    Ok(())
+                }
             }
-            result
         }))
         .await;
 
         match &result {
-            Ok(_) => {
-                for ip in dest_ips {
-                    self.peer_map.insert((*ip).clone(), value.clone());
-                }
-                Ok(())
-            }
+            Ok(_) => Ok(()),
             Err(err) => {
                 self.remove_locked(locked, dest_ips).await;
                 metrics::counter!(
@@ -324,42 +335,5 @@ mod tests {
         assert!(writer_res.unwrap().is_ok());
         assert_eq!(relay.get(&ip), Some("concurrent_node".to_string()));
         assert!(mock_handle.has_route(&ip));
-    }
-}
-
-#[derive(Debug)]
-pub struct RoutesTracker<'a, T: Clone + Debug + Send + Sync + 'static> {
-    relay: &'a Relay<T>,
-    value: T,
-    last: Vec<std::net::IpAddr>,
-}
-
-impl<'a, T: Clone + Debug + Send + Sync + 'static> RoutesTracker<'a, T> {
-    pub fn new(relay: &'a Relay<T>, value: T) -> Self {
-        Self {
-            relay,
-            value,
-            last: Vec::new(),
-        }
-    }
-}
-
-impl<'a, T: Clone + Debug + Send + Sync + 'static> crate::peer::routes_changed::RoutesChanged
-    for RoutesTracker<'a, T>
-{
-    async fn update_routes(&mut self, routes: &[std::net::IpAddr]) -> Result<(), ThinStatus> {
-        self.relay.remove(self.last.as_ref()).await;
-        self.last.clear();
-        self.relay.insert(routes, self.value.clone()).await?;
-        self.last = routes.to_vec();
-        Ok(())
-    }
-}
-
-impl<'a, T: Clone + Debug + Send + Sync + 'static> Drop for RoutesTracker<'a, T> {
-    fn drop(&mut self) {
-        if !self.last.is_empty() {
-            panic!("Routes not removed: {:?}", self.last);
-        }
     }
 }

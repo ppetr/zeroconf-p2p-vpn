@@ -119,10 +119,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 peer_network_signature: own_net_sig.to_bytes().to_vec(),
             }],
         };
-        let common_config = Arc::new(peer::CommonPeerConfig::new(
-            net_route_handle.clone(),
-            own_net,
-        ));
+        let common_config = Arc::new(peer::CommonPeerConfig::new(own_net));
 
         Ok::<(), anyhow::Error>(loop {
             let Some(conn) = link.next_connection().await? else {
@@ -137,13 +134,37 @@ async fn main() -> Result<(), anyhow::Error> {
                 advertise: advertise.clone(),
             };
 
-            let mut peer = peer::Peer::new(peer_config);
-            let tracker = relay::RoutesTracker::new(&relay, peer.clone());
-            let _ = peer.recv_loop(tx_handle.clone(), tracker).await?;
-            // TODO: tracker.update_routes(&[]).await?;
+            let peer = peer::Peer::new(peer_config);
+            let (mut peer, routes) = peer.handshake().await?;
+            relay.insert(&routes.0, peer.clone()).await?;
+            // TODO: Update routes from recv_control_loop.
+            let _ = peer.recv_loop(tx_handle.clone()).await?;
         })
     };
-    let tun_rx_loop = async {};
+    let tun_rx_loop = async {
+        while let Some(packet) = rx_handle.recv().await {
+            let mut peer_opt = None;
+            // TODO: Handle Err.
+            if let Ok(slice) = tun::inet_slice(&packet.data) {
+                if let Some(dest_ip) = tun::destination_ip(&slice) {
+                    peer_opt = relay.get(&dest_ip);
+                    if peer_opt.is_none() {}
+                }
+            }
+            let icmp_packet: Option<_> = if let Some(peer) = peer_opt {
+                match peer.send_packet(packet) {
+                    Ok(icmp_packet) => icmp_packet,
+                    Err(_) => None, // TODO: Handle errors.
+                }
+            } else {
+                None
+            }; // TODO: Handle None, that is, no peer ("no route to host").
+            if let Some(packet) = icmp_packet {
+                // TODO: Log/count errors.
+                let _ = tx_handle.try_send(packet);
+            }
+        }
+    };
 
     let _ = tokio::join!(tun_loop, connect_loop, tun_rx_loop);
     Ok(())
