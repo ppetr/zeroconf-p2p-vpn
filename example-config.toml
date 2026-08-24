@@ -1,0 +1,12 @@
+[host]
+# 15 bit hexadecimal number specifying the IPv6 subnet within the global prefix.
+# In vast majority of cases, the default value of 0 (provided if this field is
+# missing) is the best choice.
+subnet = 0x0000
+# The Ed25519 private key of this host in the raw format.
+private_key_path = "/foo/bar"
+
+[peers]
+# z32-encoded Ed25519 keys of allowed peers.
+alice = "ri5s1riaxztowkfasg645kdngnugembhsjwke5qfrktno9qjn8ty"
+bob = "..."

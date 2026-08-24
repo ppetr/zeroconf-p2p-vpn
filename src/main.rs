@@ -1,6 +1,5 @@
-use anyhow::Context;
+use anyhow::{ensure, Context};
 use backoff;
-use iroh::PublicKey;
 use metrics::IntoLabels;
 use secure_p2p_transport::{load_key_from_disk, N0Discovery, NodeExtraConfig, TransportNode};
 use std::env;
@@ -14,6 +13,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 
 mod addr;
 mod buffer_pool;
+mod config;
 mod connection;
 mod error;
 mod osal;
@@ -64,13 +64,28 @@ async fn main() -> Result<(), anyhow::Error> {
     backoff.max_elapsed_time = None;
     let backoff = backoff;
 
-    let (secret_key, mut link) = match args.as_slice() {
-        [_argv0, secret_file, peer_base32] => {
+    let (config, secret_key, mut link) = match args.as_slice() {
+        [_argv0, config_path] => {
             info!("Setting up a node");
-            let secret_key = load_key_from_disk(secret_file)?;
+            let config = config::Config::load(config_path)?;
+            let secret_key = load_key_from_disk(&config.private_key_path)?;
             info!("My public key: '{}'", secret_key.public().to_z32());
-            let peer_key = PublicKey::from_z32(peer_base32)
-                .context(format!("When decoding public key '{}'", peer_base32))?;
+
+            let mut peers = config.peers.iter();
+            let (peer_name, peer_key) = peers
+                .next()
+                .context("configuration's [peers] section must contain exactly one peer")?;
+            ensure!(
+                peers.next().is_none(),
+                "configuration's [peers] section must contain exactly one peer, found more than one"
+            );
+            info!(
+                "Connecting to peer '{}': '{}'",
+                peer_name,
+                peer_key.to_z32()
+            );
+            let peer_key = *peer_key;
+
             let node = TransportNode::new(secret_key.clone(), alpn.to_vec(), &node_config).await?;
 
             let link = connection::PeerLink::new(connection::IrohConnector {
@@ -90,9 +105,12 @@ async fn main() -> Result<(), anyhow::Error> {
                 }
             });
 
-            (secret_key, link)
+            (config, secret_key, link)
         }
-        _ => panic!("Unexpected command line arguments: {:?}", args),
+        _ => panic!(
+            "Usage: {} <config-file-path>",
+            args.first().copied().unwrap_or("zeroconf-p2p-vpn")
+        ),
     };
     let (rx_uring, mut rx_handle) = mpsc::channel::<tun::RxPacket>(64);
     let (tx_handle, tx_uring) = mpsc::channel::<tun::TxPacket>(64);
@@ -106,7 +124,7 @@ async fn main() -> Result<(), anyhow::Error> {
     };
 
     let (own_net, own_net_sig) = addr::generate_signed_ipnet(
-        &ipnet::IpNet::V6(addr::VPN_IPV6_DEFAULT_SUBNET0),
+        &ipnet::IpNet::V6(addr::vpn_subnet(config.subnet)),
         &secret_key,
     );
     tracing::warn!("My VPN address: {}", own_net.addr());

@@ -1,0 +1,5 @@
+[host]
+private_key_path = "keys/bob.raw"
+
+[peers]
+alice = "ri5s1riaxztowkfasg645kdngnugembhsjwke5qfrktno9qjn8ty"

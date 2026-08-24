@@ -17,9 +17,19 @@ pub const VPN_IPV6_PREFIX: Ipv6Net =
 pub const VPN_IPV6_DEFAULT_ALLOWED: Ipv6Net =
     Ipv6Net::new_assert(VPN_IPV6_PREFIX.addr(), VPN_IPV6_PREFIX.prefix_len() + 1);
 
-/// A 1-bit sub-range of `VPN_IPV6_PREFIX`. That is, we allow subnets within 0x7fff.
-/// For now subnets 0x8000 and above are reserved for future use.
-pub const VPN_IPV6_DEFAULT_SUBNET0: Ipv6Net = Ipv6Net::new_assert(VPN_IPV6_PREFIX.addr(), 64);
+/// The highest legal value of a subnet ID. Values with the top bit set (0x8000 and above) are
+/// reserved for future use; see `VPN_IPV6_DEFAULT_ALLOWED`.
+pub const MAX_SUBNET: u16 =
+    u16::MAX >> (VPN_IPV6_DEFAULT_ALLOWED.prefix_len() - VPN_IPV6_PREFIX.prefix_len());
+
+/// Builds the `/64` network of the given 16-bit subnet ID within `VPN_IPV6_PREFIX`.
+/// The default subnet is 0.
+pub const fn vpn_subnet(subnet: u16) -> Ipv6Net {
+    let base_bits = VPN_IPV6_PREFIX.addr().to_bits();
+    let addr_bits = base_bits | ((subnet as u128) << 64);
+    let addr = Ipv6Addr::from_bits(addr_bits);
+    Ipv6Net::new_assert(addr, 64)
+}
 
 /// Generates an IP address within the given subnet based on a digital signature. The output
 /// `IpNet::addr()` contains the new address, with the same prefix length as the `net` argument.
@@ -109,6 +119,21 @@ fn derive_ipv6(net: &Ipv6Net, entropy: u128) -> Ipv6Addr {
 mod tests {
     use super::*;
     use std::str::FromStr;
+
+    #[test]
+    fn test_vpn_subnet_zero_matches_default_subnet0() {
+        assert_eq!(vpn_subnet(0), Ipv6Net::new_assert(VPN_IPV6_PREFIX.addr(), 64));
+    }
+
+    #[test]
+    fn test_vpn_subnet_sets_the_subnet_id_bits() {
+        let net = vpn_subnet(0x1234);
+        assert_eq!(net.prefix_len(), 64);
+        assert_eq!(
+            net.addr(),
+            Ipv6Addr::new(0xfdbd, 0xa6ce, 0x654d, 0x1234, 0, 0, 0, 0)
+        );
+    }
 
     #[test]
     fn test_ipv4_workflow_happy_path() {
