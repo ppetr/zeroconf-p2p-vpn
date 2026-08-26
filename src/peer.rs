@@ -430,4 +430,35 @@ mod tests {
         node_a.close().await;
         node_b.close().await;
     }
+
+    #[tokio::test]
+    async fn recv_control_loop_returns_updated_routes() {
+        let (node_a, node_b) = test_util::connect_pair().await;
+        let common = test_util::common_config(tun::IcmpGateway::default());
+
+        let subnet = IpNet::V6(addr::vpn_subnet(0));
+        let advertise_a = test_util::advertise_for(&node_a.secret_key, &subnet);
+        let advertise_b = test_util::advertise_for(&node_b.secret_key, &subnet);
+
+        let peer_a = Peer::new(test_util::peer_config(&node_a, common.clone(), advertise_a));
+        let peer_b = Peer::new(test_util::peer_config(&node_b, common, advertise_b));
+
+        let (result_a, result_b) = tokio::join!(peer_a.handshake(), peer_b.handshake());
+        let (connected_a, _) = result_a.expect("A's handshake should succeed");
+        let (connected_b, _) = result_b.expect("B's handshake should succeed");
+
+        // Simulate A re-advertising after the initial handshake (e.g. following a config
+        // change): send a second `Advertise` on a fresh stream, independent of the one used
+        // during the handshake, and confirm `recv_control_loop` picks it up.
+        let (send_result, recv_result) = tokio::join!(
+            connected_a.peer.send_advertise(),
+            connected_b.recv_control_loop(),
+        );
+        send_result.expect("A's second advertise should send successfully");
+        let routes = recv_result.expect("B's recv_control_loop should return the updated routes");
+        assert_eq!(routes.0.len(), 1);
+
+        node_a.close().await;
+        node_b.close().await;
+    }
 }
