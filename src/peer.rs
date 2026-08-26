@@ -364,6 +364,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handshake_fails_if_connection_closes_mid_handshake() {
+        let (node_a, node_b) = test_util::connect_pair().await;
+        let common = test_util::common_config(tun::IcmpGateway::default());
+
+        let subnet = IpNet::V6(addr::vpn_subnet(0));
+        let advertise_b = test_util::advertise_for(&node_b.secret_key, &subnet);
+        let peer_b = Peer::new(test_util::peer_config(&node_b, common, advertise_b));
+
+        // Close A's side instead of running its handshake, simulating a peer that disconnects
+        // mid-handshake. B's `handshake()` must fail promptly, not hang until its own timeout.
+        node_a
+            .conn
+            .close(VarInt::from_u32(0), b"simulated disconnect");
+
+        let started = std::time::Instant::now();
+        let result = peer_b.handshake().await;
+        assert!(result.is_err(), "B's handshake should fail: {result:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "B's handshake should fail promptly on connection close, not wait out its own timeout"
+        );
+
+        node_a.close().await;
+        node_b.close().await;
+    }
+
+    #[tokio::test]
     async fn send_packet_delivers_datagram_end_to_end() {
         let (node_a, node_b) = test_util::connect_pair().await;
         let common = test_util::common_config(tun::IcmpGateway::default());
