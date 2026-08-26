@@ -391,6 +391,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handshake_times_out_if_peer_never_responds() {
+        let (node_a, node_b) = test_util::connect_pair().await;
+
+        // A deliberately short deadline: this test waits out the whole `handshake_timeout`, so a
+        // 5s deadline (like `test_util::common_config` uses elsewhere) would make it slow. If
+        // this turns out flaky under load in CI, mark it `#[ignore]` with an explanation instead
+        // of just raising the deadline back up.
+        let short_timeout = Duration::from_millis(200);
+        let mut common = CommonPeerConfig::new(tun::IcmpGateway::default());
+        common.handshake_timeout = short_timeout;
+
+        let subnet = IpNet::V6(addr::vpn_subnet(0));
+        let advertise_b = test_util::advertise_for(&node_b.secret_key, &subnet);
+        let peer_b = Peer::new(test_util::peer_config(
+            &node_b,
+            Arc::new(common),
+            advertise_b,
+        ));
+
+        // A never runs its own handshake (never sends an `Advertise` or responds to B's), but
+        // its connection stays open — unlike `handshake_fails_if_connection_closes_mid_handshake`,
+        // this exercises the deadline itself rather than an immediate connection-closed error.
+        let started = std::time::Instant::now();
+        let result = peer_b.handshake().await;
+        let elapsed = started.elapsed();
+
+        assert!(result.is_err(), "B's handshake should fail: {result:?}");
+        assert!(
+            elapsed >= short_timeout,
+            "should wait out the full handshake_timeout, took {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "should fail close to the configured handshake_timeout, took {elapsed:?}"
+        );
+
+        node_a.close().await;
+        node_b.close().await;
+    }
+
+    #[tokio::test]
     async fn send_packet_delivers_datagram_end_to_end() {
         let (node_a, node_b) = test_util::connect_pair().await;
         let common = test_util::common_config(tun::IcmpGateway::default());
