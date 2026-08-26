@@ -4,6 +4,7 @@
 //! (whose surface is wide enough, and shared with `proto::write_control`/`read_control`, that a
 //! trait abstraction would just move the mocking problem elsewhere).
 
+use bytes::BufMut;
 use ipnet::IpNet;
 use iroh::endpoint::{presets, Connection, Endpoint};
 use iroh::{EndpointAddr, RelayMode, SecretKey, TransportAddr};
@@ -13,9 +14,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::addr;
+use crate::buffer_pool::BufferPool;
 use crate::peer::{CommonPeerConfig, PeerConfig};
 use crate::proto::v1::{Advertise, HostAddress};
-use crate::tun::packet::IcmpGateway;
+use crate::tun::packet::{IcmpGateway, RxPacket};
 
 /// ALPN used for test connections; arbitrary, but must match on both sides.
 const TEST_ALPN: &[u8] = b"zeroconf-p2p-vpn/test/1.0";
@@ -132,4 +134,14 @@ pub fn peer_config(node: &Node, common: Arc<CommonPeerConfig>, advertise: Advert
         conn: node.conn.clone(),
         advertise,
     }
+}
+
+/// Builds an `RxPacket` wrapping `data`, for tests that push a packet through
+/// `Peer::send_packet`. `data` doesn't need to be a well-formed IP packet unless the test
+/// exercises a code path (e.g. the MTU-exceeded ICMP reply) that parses it.
+pub async fn rx_packet(data: &[u8]) -> RxPacket {
+    let mut pool = BufferPool::new(1, data.len(), metrics::gauge!("test_rx_packet_pool"));
+    let mut buffer = pool.pop().await;
+    buffer.put_slice(data);
+    RxPacket::new(buffer.into())
 }

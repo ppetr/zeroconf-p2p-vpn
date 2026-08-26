@@ -334,4 +334,73 @@ mod tests {
         node_a.close().await;
         node_b.close().await;
     }
+
+    #[tokio::test]
+    async fn handshake_rejects_address_outside_allowed_networks() {
+        let (node_a, node_b) = test_util::connect_pair().await;
+        let common = test_util::common_config(tun::IcmpGateway::default());
+
+        // A advertises an IPv4 address, which falls outside B's (default) IPv6-only
+        // `allowed_networks`, so B must reject the handshake.
+        let disallowed_subnet: IpNet = "10.0.0.0/24".parse().unwrap();
+        let advertise_a = test_util::advertise_for(&node_a.secret_key, &disallowed_subnet);
+        let advertise_b =
+            test_util::advertise_for(&node_b.secret_key, &IpNet::V6(addr::vpn_subnet(0)));
+
+        let peer_a = Peer::new(test_util::peer_config(&node_a, common.clone(), advertise_a));
+        let peer_b = Peer::new(test_util::peer_config(&node_b, common, advertise_b));
+
+        let (result_a, result_b) = tokio::join!(peer_a.handshake(), peer_b.handshake());
+
+        // B rejects A's advertise and closes the connection with a `ControlResponse` carrying
+        // the failure status; A observes that failure when reading the response to its own
+        // `send_advertise`, so BOTH sides' `handshake()` fail here, even though only A's address
+        // was invalid.
+        assert!(result_a.is_err(), "A's handshake should fail: {result_a:?}");
+        assert!(result_b.is_err(), "B's handshake should fail: {result_b:?}");
+
+        node_a.close().await;
+        node_b.close().await;
+    }
+
+    #[tokio::test]
+    async fn send_packet_delivers_datagram_end_to_end() {
+        let (node_a, node_b) = test_util::connect_pair().await;
+        let common = test_util::common_config(tun::IcmpGateway::default());
+
+        let subnet = IpNet::V6(addr::vpn_subnet(0));
+        let advertise_a = test_util::advertise_for(&node_a.secret_key, &subnet);
+        let advertise_b = test_util::advertise_for(&node_b.secret_key, &subnet);
+
+        let peer_a = Peer::new(test_util::peer_config(&node_a, common.clone(), advertise_a));
+        let peer_b = Peer::new(test_util::peer_config(&node_b, common, advertise_b));
+
+        let (result_a, result_b) = tokio::join!(peer_a.handshake(), peer_b.handshake());
+        let (connected_a, _) = result_a.expect("A's handshake should succeed");
+        let (mut connected_b, _) = result_b.expect("B's handshake should succeed");
+
+        let (tx, mut rx) = mpsc::channel(1);
+        tokio::spawn(async move {
+            let _ = connected_b.recv_loop(tx).await;
+        });
+
+        let payload = b"hello over quic";
+        let packet = test_util::rx_packet(payload).await;
+        let icmp_reply = connected_a
+            .send_packet(packet)
+            .expect("send_packet should succeed for a packet under the connection's MTU");
+        assert!(
+            icmp_reply.is_none(),
+            "a packet under the MTU shouldn't trigger an ICMP reply"
+        );
+
+        let received = timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("B should receive A's datagram before the test timeout")
+            .expect("the recv_loop channel shouldn't close");
+        assert_eq!(&received.data[..], payload);
+
+        node_a.close().await;
+        node_b.close().await;
+    }
 }
