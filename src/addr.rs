@@ -27,8 +27,7 @@ pub const MAX_SUBNET: u16 =
 pub const fn vpn_subnet(subnet: u16) -> Ipv6Net {
     let base_bits = VPN_IPV6_PREFIX.addr().to_bits();
     let addr_bits = base_bits | ((subnet as u128) << 64);
-    let addr = Ipv6Addr::from_bits(addr_bits);
-    Ipv6Net::new_assert(addr, 64)
+    Ipv6Net::new_assert(Ipv6Addr::from_bits(addr_bits), 64)
 }
 
 /// Generates an IP address within the given subnet based on a digital signature. The output
@@ -122,7 +121,10 @@ mod tests {
 
     #[test]
     fn test_vpn_subnet_zero_matches_default_subnet0() {
-        assert_eq!(vpn_subnet(0), Ipv6Net::new_assert(VPN_IPV6_PREFIX.addr(), 64));
+        assert_eq!(
+            vpn_subnet(0),
+            Ipv6Net::new_assert(VPN_IPV6_PREFIX.addr(), 64)
+        );
     }
 
     #[test]

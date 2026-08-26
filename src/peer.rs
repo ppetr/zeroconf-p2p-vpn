@@ -15,6 +15,8 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 mod conn_metrics;
+#[cfg(test)]
+pub(crate) mod test_util;
 mod validate_addr;
 
 use crate::addr;
@@ -297,5 +299,39 @@ impl ConnectedPeer {
                 None => (),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn handshake_exchanges_routes() {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_test_writer()
+            .try_init();
+        let (node_a, node_b) = test_util::connect_pair().await;
+        let common = test_util::common_config(tun::IcmpGateway::default());
+
+        let subnet = IpNet::V6(addr::vpn_subnet(0));
+        let advertise_a = test_util::advertise_for(&node_a.secret_key, &subnet);
+        let advertise_b = test_util::advertise_for(&node_b.secret_key, &subnet);
+
+        let peer_a = Peer::new(test_util::peer_config(&node_a, common.clone(), advertise_a));
+        let peer_b = Peer::new(test_util::peer_config(&node_b, common, advertise_b));
+
+        let (result_a, result_b) = tokio::join!(peer_a.handshake(), peer_b.handshake());
+        let (connected_a, routes_a) = result_a.expect("A's handshake should succeed");
+        let (connected_b, routes_b) = result_b.expect("B's handshake should succeed");
+
+        assert_eq!(connected_a.public_key(), node_b.secret_key.public());
+        assert_eq!(connected_b.public_key(), node_a.secret_key.public());
+        assert_eq!(routes_a.0.len(), 1);
+        assert_eq!(routes_b.0.len(), 1);
+
+        node_a.close().await;
+        node_b.close().await;
     }
 }
