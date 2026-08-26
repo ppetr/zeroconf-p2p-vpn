@@ -10,9 +10,9 @@ use crate::error::ExtractedErrorCode;
 use crate::route::{NetRouteHandle, RoutingTable, ScopedRoute};
 
 #[derive(Debug)]
-struct PeerValue<T, R: RoutingTable + 'static = NetRouteHandle> {
+struct PeerValue<T> {
     value: T,
-    _route: ScopedRoute<R>,
+    route: ScopedRoute,
 }
 
 /// Keeps a list of values (peers) in a sharded map (`DashMap`) indexed by `IpAddr`.
@@ -21,7 +21,7 @@ pub struct Relay<T: Clone + Debug, R: RoutingTable = NetRouteHandle> {
     // TODO: Use some clever async single-flight mechanism to just combine requests to each IP
     // address and run their requests in parallel.
     handle: Mutex<R>,
-    peer_map: DashMap<IpAddr, PeerValue<T, R>>,
+    peer_map: DashMap<IpAddr, PeerValue<T>>,
 }
 
 impl<T: Clone + Debug + Send + Sync + 'static, R: RoutingTable> Relay<T, R> {
@@ -50,7 +50,17 @@ impl<T: Clone + Debug + Send + Sync + 'static, R: RoutingTable> Relay<T, R> {
         let locked = &locked;
         let value_ref = &value;
         let result = try_join_all(dest_ips.into_iter().map(|ip| async move {
-            let result = ScopedRoute::new((*locked).clone(), (*ip).clone()).await;
+            // If this IP already has a route (e.g. we're re-inserting it for a reconnected
+            // peer), remove it first. The new `ScopedRoute` below targets the exact same
+            // OS-level route (same destination, same routing table), so inserting the new one
+            // before removing the old would just have the old route's removal undo it.
+            if let Some((_, old)) = self.peer_map.remove(ip) {
+                if let Err(err) = old.route.drop_async(&**locked).await {
+                    tracing::warn!(error = ?err, dest_ip = ?ip,
+                                    "Error removing the route being replaced");
+                }
+            }
+            let result = ScopedRoute::new(&**locked, (*ip).clone()).await;
             match result {
                 Err(err) => {
                     tracing::error!(error = ?err, dest_ip = ?ip, peer = ?value_ref.clone(),
@@ -62,7 +72,7 @@ impl<T: Clone + Debug + Send + Sync + 'static, R: RoutingTable> Relay<T, R> {
                         (*ip).clone(),
                         PeerValue {
                             value: value_ref.clone(),
-                            _route: scoped,
+                            route: scoped,
                         },
                     );
                     Ok(())
@@ -92,11 +102,15 @@ impl<T: Clone + Debug + Send + Sync + 'static, R: RoutingTable> Relay<T, R> {
     }
 
     async fn remove_locked(&self, locked: &MutexGuard<'_, R>, dest_ips: &[IpAddr]) {
-        for ip in dest_ips {
-            self.peer_map.remove(ip);
-        }
         let _ = join_all(dest_ips.into_iter().map(|ip| async {
-            let result = locked.remove((*ip).clone()).await;
+            // Prefer removing via the tracked `ScopedRoute` if we have one: it's the same route
+            // `insert` created. If there's no entry (e.g. rolling back an `insert` whose
+            // `ScopedRoute::new` itself failed), fall back to a best-effort direct removal in
+            // case the OS partially applied it anyway.
+            let result = match self.peer_map.remove(ip) {
+                Some((_, old)) => old.route.drop_async(&**locked).await.map(|_ip| ()),
+                None => locked.remove((*ip).clone()).await,
+            };
             if let Err(err) = &result {
                 tracing::error!(error = ?err, dest_ip = ?(*ip).clone(),
                     "Errors removing route to the system routing tables");
@@ -186,6 +200,8 @@ mod tests {
             "Route must be registered in mock table"
         );
         assert_eq!(relay.get(&ip), Some("peer_1".to_string()));
+
+        relay.remove(&ips).await;
     }
 
     #[tokio::test]
@@ -209,6 +225,8 @@ mod tests {
         assert_eq!(relay.get(&ip1), Some(42));
         assert_eq!(relay.get(&ip2), Some(42));
         assert_eq!(relay.get(&ip3), Some(42));
+
+        relay.remove(&ips).await;
     }
 
     #[tokio::test]
@@ -257,12 +275,14 @@ mod tests {
             mock_handle.has_route(&ip2),
             "ip2 should remain in mock routing table"
         );
+
+        relay.remove(&[ip2]).await;
     }
 
     #[tokio::test]
     async fn test_overwrite_existing_ip() {
         let mock_handle = MockRouteHandle::new();
-        let relay = Relay::new(mock_handle);
+        let relay = Relay::new(mock_handle.clone());
 
         let ip = ip4(192, 168, 100, 5);
         let peer_val1 = "initial_peer".to_string();
@@ -274,6 +294,14 @@ mod tests {
 
         relay.insert(&ips, peer_val2).await.unwrap();
         assert_eq!(relay.get(&ip), Some("updated_peer".to_string()));
+        assert!(
+            mock_handle.has_route(&ip),
+            "route must still be active after overwriting the IP with a new peer value \
+             (regression check: the old entry's route must be released and removed before \
+             the new one is inserted, not after — both target the same OS-level route)"
+        );
+
+        relay.remove(&ips).await;
     }
 
     #[tokio::test]
@@ -335,5 +363,7 @@ mod tests {
         assert!(writer_res.unwrap().is_ok());
         assert_eq!(relay.get(&ip), Some("concurrent_node".to_string()));
         assert!(mock_handle.has_route(&ip));
+
+        relay.remove(&[ip]).await;
     }
 }

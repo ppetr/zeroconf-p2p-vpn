@@ -1,12 +1,8 @@
-use futures_util::future::FutureExt;
-use metrics::IntoLabels;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
 use tracing::{info_span, Instrument};
 
 pub mod ecn;
-
-use crate::error::ExtractedErrorCode;
 
 pub trait RoutingTable: Clone + Send + Sync + std::fmt::Debug + 'static {
     fn insert(
@@ -98,56 +94,123 @@ impl std::hash::Hash for NetRouteHandle {
     }
 }
 
-/// An RAII guard that keeps an IP route active until it is dropped.
+/// A guard that tracks one IP address routed through a `RoutingTable`, and panics on `Drop` if it
+/// wasn't disposed of correctly via [`ScopedRoute::drop_async`].
 ///
-/// When instantiated via `ScopedRoute::new`, the specified IP address is routed through the
-/// provided network interface index. When the instance falls out of scope, a background thread
-/// automatically deletes the route from the OS routing table.
+/// Unlike a typical RAII guard, `ScopedRoute` does NOT itself hold a `RoutingTable` handle —
+/// callers (in practice, just `Relay`) already hold their own handle and control the exact
+/// ordering of insert/remove OS operations relative to their own bookkeeping (e.g. `Relay` must
+/// remove a replaced route before inserting its replacement, since both target the same OS-level
+/// route). `ScopedRoute` only exists to make forgetting that removal a hard error instead of a
+/// silent leak.
 #[derive(Debug, PartialEq, Eq)]
-pub struct ScopedRoute<R: RoutingTable> {
-    handle: R,
+pub struct ScopedRoute {
     dest_ip: IpAddr,
 }
 
-impl<R: RoutingTable> ScopedRoute<R> {
-    /// Constructs a new `ScopedRoute` and immediately registers it with the system routing table.
+impl ScopedRoute {
+    /// Constructs a new `ScopedRoute` and immediately registers it with the system routing table
+    /// via `handle`.
     ///
-    /// # Arguments
-    /// * `handle` - An active [`net_route::Handle`] connection.
-    /// * `dest_ip` - The destination IP address (IPv4 or IPv6) to route.
-    pub async fn new(handle: R, dest_ip: IpAddr) -> Result<Self, std::io::Error> {
-        let this = Self {
-            handle,
-            dest_ip: dest_ip.clone(),
-        };
-        this.handle.insert(dest_ip).await?;
-        Ok(this)
+    /// `Self` is only constructed (and so becomes subject to the `Drop` guard below) once the
+    /// route is actually active.
+    pub async fn new<R: RoutingTable>(handle: &R, dest_ip: IpAddr) -> Result<Self, std::io::Error> {
+        // ... otherwise a failed insert would immediately trip the "forgot to call drop_async"
+        // panic for a route that was never inserted in the first place.
+        handle.insert(dest_ip).await?;
+        Ok(Self { dest_ip })
     }
 
     pub fn dest_ip(&self) -> &IpAddr {
         &self.dest_ip
     }
 
-    pub async fn drop_async(self) -> Result<(), std::io::Error> {
-        Self::drop_detached(self.handle.clone(), self.dest_ip).await
-    }
-
-    async fn drop_detached(handle: R, dest_ip: IpAddr) -> Result<(), std::io::Error> {
-        handle.remove(dest_ip).await
+    /// Removes the route via `handle` and consumes `self`, returning the destination IP on
+    /// success.
+    ///
+    /// This is the only correct way to dispose of a `ScopedRoute` — merely letting one fall out
+    /// of scope panics (see `Drop` below). `self` is marked released regardless of whether the
+    /// removal succeeds: on failure there's nothing else the caller could do differently with the
+    /// guard, so keeping it alive to force a retry would just be an extra footgun for no benefit —
+    /// callers that do care should inspect the returned `Err` and act on it themselves.
+    pub async fn drop_async<R: RoutingTable>(
+        mut self,
+        handle: &R,
+    ) -> Result<IpAddr, std::io::Error> {
+        let dest_ip = std::mem::replace(&mut self.dest_ip, IpAddr::V6(Ipv6Addr::UNSPECIFIED));
+        handle.remove(dest_ip).await.map(|()| dest_ip)
     }
 }
 
-impl<R: RoutingTable> Drop for ScopedRoute<R> {
+impl Drop for ScopedRoute {
+    /// Only guards against forgetting to call `drop_async` — panics if it wasn't called, rather
+    /// than removing the route itself. See `drop_async`'s docs for why.
     fn drop(&mut self) {
-        let is_ipv6 = self.dest_ip().is_ipv6();
-        let future = Self::drop_detached(self.handle.clone(), self.dest_ip);
-        tokio::spawn(future.map(move |result| match result {
-            Err(err) => {
-                let mut labels = ExtractedErrorCode::from_io(&err).into_labels();
-                labels.push(metrics::Label::new("ip", if is_ipv6 { "v6" } else { "v4" }));
-                metrics::counter!("scoped_route_cleanup_errors_total", labels).increment(1);
-            }
-            _ => {}
-        }));
+        if !self.dest_ip.is_unspecified() {
+            panic!(
+                "ScopedRoute for {} was dropped without calling drop_async() first",
+                self.dest_ip
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    /// A `RoutingTable` that always succeeds, for exercising `ScopedRoute` itself in isolation.
+    #[derive(Clone, Debug)]
+    struct FakeRoutingTable;
+
+    impl RoutingTable for FakeRoutingTable {
+        async fn insert(&self, _dest_ip: IpAddr) -> Result<(), std::io::Error> {
+            Ok(())
+        }
+        async fn remove(&self, _dest_ip: IpAddr) -> Result<(), std::io::Error> {
+            Ok(())
+        }
+    }
+
+    /// A `RoutingTable` whose `remove` always fails, to check `drop_async`'s failure path.
+    #[derive(Clone, Debug)]
+    struct FailingRemoveRoutingTable;
+
+    impl RoutingTable for FailingRemoveRoutingTable {
+        async fn insert(&self, _dest_ip: IpAddr) -> Result<(), std::io::Error> {
+            Ok(())
+        }
+        async fn remove(&self, _dest_ip: IpAddr) -> Result<(), std::io::Error> {
+            Err(std::io::Error::other("mock remove failure"))
+        }
+    }
+
+    #[tokio::test]
+    async fn drop_async_returns_the_ip_and_lets_the_route_drop_without_panicking() {
+        let dest_ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+        let route = ScopedRoute::new(&FakeRoutingTable, dest_ip).await.unwrap();
+        assert_eq!(route.drop_async(&FakeRoutingTable).await.unwrap(), dest_ip);
+        // Reaching this point without a panic is part of the assertion: `drop_async` above
+        // already marked the route as cleaned up, so the `Drop` impl won't fire its panic below.
+    }
+
+    #[tokio::test]
+    async fn drop_async_marks_the_route_released_even_if_removal_fails() {
+        let dest_ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3));
+        let route = ScopedRoute::new(&FakeRoutingTable, dest_ip).await.unwrap();
+        assert!(route.drop_async(&FailingRemoveRoutingTable).await.is_err());
+        // Reaching this point without a panic is part of the assertion: even though removal
+        // failed, `drop_async` still marks the route released — there's nothing else the caller
+        // could do differently with the guard, so keeping it alive would just be a footgun.
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "drop_async()")]
+    async fn dropping_without_drop_async_panics() {
+        let _route = ScopedRoute::new(&FakeRoutingTable, IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)))
+            .await
+            .unwrap();
+        // Falls out of scope here without calling `drop_async` first.
     }
 }
