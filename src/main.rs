@@ -103,23 +103,26 @@ async fn main() -> Result<(), anyhow::Error> {
         };
         tun.control(opts).await
     };
+
+    let (own_net, own_net_sig) = addr::generate_signed_ipnet(
+        &ipnet::IpNet::V6(addr::VPN_IPV6_DEFAULT_SUBNET0),
+        &secret_key,
+    );
+    tracing::warn!("My VPN address: {}", own_net.addr());
+    tun.add_if_addr(own_net.addr()).await?;
+
+    let icmp_gateway = tun::IcmpGateway::from_addr(own_net.addr());
+
     // TODO: Cancellation.
     let relay = relay::Relay::new(net_route_handle.clone());
     let connect_loop = async {
-        let (own_net, own_net_sig) = addr::generate_signed_ipnet(
-            &ipnet::IpNet::V6(addr::VPN_IPV6_DEFAULT_SUBNET0),
-            &secret_key,
-        );
-        tracing::warn!("My VPN address: {}", own_net.addr());
-        tun.add_if_addr(own_net.addr()).await?;
-
         let advertise = proto::v1::Advertise {
             own_addresses: vec![proto::v1::HostAddress {
                 peer_network: own_net.to_string(),
                 peer_network_signature: own_net_sig.to_bytes().to_vec(),
             }],
         };
-        let common_config = Arc::new(peer::CommonPeerConfig::new(own_net));
+        let common_config = Arc::new(peer::CommonPeerConfig::new(icmp_gateway.clone()));
 
         Ok::<(), anyhow::Error>(loop {
             let Some(conn) = link.next_connection().await? else {

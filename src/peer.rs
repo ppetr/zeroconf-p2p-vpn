@@ -30,15 +30,15 @@ use crate::tun::packet as tun;
 pub struct CommonPeerConfig {
     pub allowed_networks: Vec<IpNet>,
     pub handshake_timeout: Duration,
-    own_net: IpNet,
+    pub icmp_gateway: tun::IcmpGateway,
 }
 
 impl CommonPeerConfig {
-    pub fn new(own_net: IpNet) -> CommonPeerConfig {
+    pub fn new(icmp_gateway: tun::IcmpGateway) -> CommonPeerConfig {
         CommonPeerConfig {
             allowed_networks: vec![IpNet::V6(addr::VPN_IPV6_DEFAULT_ALLOWED)],
             handshake_timeout: Duration::from_mins(1),
-            own_net,
+            icmp_gateway,
         }
     }
 }
@@ -56,7 +56,6 @@ pub struct RoutesChanged(pub Vec<IpAddr>);
 #[derive(Clone, Debug)]
 pub struct Peer {
     config: PeerConfig,
-    icmp_gateway: tun::IcmpGateway,
     max_send_buffer_space: f32,
 }
 
@@ -64,11 +63,9 @@ impl Peer {
     const ECN_THRESHOLD: f32 = 0.5;
 
     pub fn new(config: PeerConfig) -> Self {
-        let icmp_gateway = tun::IcmpGateway::from_addr(config.common.own_net.addr());
         let max_send_buffer_space = config.conn.datagram_send_buffer_space() as f32;
         Peer {
             config,
-            icmp_gateway,
             max_send_buffer_space,
         }
     }
@@ -85,7 +82,7 @@ impl Peer {
             if (&packet).len() > mtu {
                 let mtu = std::cmp::min(mtu, u16::MAX as usize) as u16;
                 let mut buf = bytes::BytesMut::with_capacity(128);
-                match self.icmp_gateway.generate_reply(
+                match self.config.common.icmp_gateway.generate_reply(
                     &mut buf,
                     &packet,
                     tun::IcmpType::packet_too_big(mtu),
