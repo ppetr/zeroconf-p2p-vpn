@@ -1,6 +1,7 @@
 use anyhow::Context;
 use backoff;
 use iroh::PublicKey;
+use metrics::IntoLabels;
 use secure_p2p_transport::{load_key_from_disk, N0Discovery, NodeExtraConfig, TransportNode};
 use std::env;
 #[allow(unused_imports)]
@@ -146,23 +147,51 @@ async fn main() -> Result<(), anyhow::Error> {
     };
     let tun_rx_loop = async {
         while let Some(packet) = rx_handle.recv().await {
+            let span = tracing::debug_span!(
+                "p2p_tun_rx_loop",
+                dest_ip = tracing::field::Empty,
+                peer = tracing::field::Empty,
+                "Processing packet received from TUN"
+            );
             let icmp_packet: Option<_> = if let Some(peer) = tun::inet_slice(&packet.data)
                 .ok()
                 .as_ref()
                 .and_then(tun::destination_ip)
                 .as_ref()
-                .and_then(|dest_ip| relay.get(dest_ip))
-            {
+                .and_then(|dest_ip| {
+                    tracing::record_all!(span, dest_ip = ?dest_ip);
+                    relay.get(dest_ip)
+                }) {
+                tracing::record_all!(span, peer = ?peer.public_key().to_z32());
                 match peer.send_packet(packet) {
                     Ok(icmp_packet) => icmp_packet,
-                    Err(_) => None, // TODO: Handle errors.
+                    Err(err) => {
+                        tracing::debug!(peer = ?peer.public_key().to_z32(), err = ?err,
+                                        "Error sending packet to peer");
+                        metrics::counter!(
+                            "p2p_vpn_tun_rx_loop_send_packet",
+                            error::ExtractedErrorCode::from_anyhow(&err).into_labels()
+                        )
+                        .increment(1);
+                        None
+                    }
                 }
             } else {
-                None
-            }; // TODO: Handle None, that is, no peer ("no route to host").
+                let mut buf = bytes::BytesMut::with_capacity(128);
+                icmp_gateway
+                    .generate_reply(&mut buf, &packet, tun::IcmpType::unreachable_net())
+                    .ok()
+                    .map(|_| tun::TxPacket::new(buf.into()))
+            };
             if let Some(packet) = icmp_packet {
-                // TODO: Log/count errors.
-                let _ = tx_handle.try_send(packet);
+                if let Err(err) = tx_handle.try_send(packet) {
+                    tracing::debug!(err = ?err, "Error sending return ICMP packet");
+                    metrics::counter!(
+                        "p2p_vpn_tun_rx_loop_return_icmp",
+                        error::ExtractedErrorCode::from_anyhow(&err.into()).into_labels()
+                    )
+                    .increment(1);
+                }
             }
         }
     };
