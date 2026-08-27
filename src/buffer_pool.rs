@@ -199,3 +199,124 @@ impl From<PooledBuffer> for PooledSlice {
         PooledSlice { owned }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn pool(count: usize, buf_size: usize) -> BufferPool {
+        BufferPool::new(count, buf_size, metrics::Gauge::noop())
+    }
+
+    #[tokio::test]
+    async fn new_prefills_count_buffers_of_the_requested_size() {
+        let mut pool = pool(3, 16);
+        for _ in 0..3 {
+            let buf = pool.pop().await;
+            assert_eq!(buf.remaining_mut(), 16);
+            assert_eq!(buf.len(), 0); // nothing filled yet
+        }
+    }
+
+    #[tokio::test]
+    #[ntest::timeout(2000)]
+    async fn pop_blocks_until_a_buffer_is_returned() {
+        tokio::time::pause();
+        let mut pool = pool(1, 8);
+
+        let buf = pool.pop().await;
+        // The only buffer is checked out, so a further pop cannot make progress.
+        assert!(tokio::time::timeout(Duration::from_millis(50), pool.pop())
+            .await
+            .is_err());
+
+        drop(buf); // returns the buffer to the pool
+        assert!(tokio::time::timeout(Duration::from_millis(50), pool.pop())
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn dropping_a_buffer_after_the_pool_is_gone_does_not_panic() {
+        let mut pool = pool(1, 8);
+        let buf = pool.pop().await;
+        drop(pool);
+        // The `WeakSender` can no longer be upgraded, so `Drop` is a silent no-op.
+        drop(buf);
+    }
+
+    #[tokio::test]
+    async fn buf_mut_writes_are_visible_through_deref() {
+        let mut pool = pool(1, 8);
+        let mut buf = pool.pop().await;
+
+        buf.put_slice(&[1, 2, 3]);
+        assert_eq!(&buf[..], &[1, 2, 3]);
+        assert_eq!(buf.remaining_mut(), 5);
+
+        buf.put_slice(&[4, 5]);
+        assert_eq!(&buf[..], &[1, 2, 3, 4, 5]);
+        assert_eq!(buf.remaining_mut(), 3);
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "beyond the buffer size")]
+    async fn advance_mut_past_capacity_panics() {
+        let mut pool = pool(1, 4);
+        let mut buf = pool.pop().await;
+        unsafe { buf.advance_mut(5) };
+    }
+
+    #[tokio::test]
+    async fn read_buf_commits_the_written_region_on_drop() {
+        let mut pool = pool(1, 8);
+        let mut buf = pool.pop().await;
+
+        {
+            let mut read_buf = buf.read_buf();
+            read_buf.put_slice(&[7, 7, 7]);
+        }
+        assert_eq!(&buf[..], &[7, 7, 7]);
+        assert_eq!(buf.remaining_mut(), 5);
+
+        // A second scoped write appends after the first.
+        {
+            let mut read_buf = buf.read_buf();
+            read_buf.put_slice(&[8]);
+        }
+        assert_eq!(&buf[..], &[7, 7, 7, 8]);
+    }
+
+    #[tokio::test]
+    async fn pooled_slice_exposes_the_filled_bytes_and_converts_back() {
+        let mut pool = pool(1, 8);
+        let mut buf = pool.pop().await;
+        buf.put_slice(&[4, 5, 6]);
+
+        let slice: PooledSlice = buf.into();
+        assert_eq!(slice.as_ref(), &[4, 5, 6]);
+        assert_eq!(&slice[..], &[4, 5, 6]);
+
+        let buf = slice.to_buffer();
+        assert_eq!(&buf[..], &[4, 5, 6]);
+        assert_eq!(buf.remaining_mut(), 5);
+    }
+
+    #[tokio::test]
+    #[ntest::timeout(2000)]
+    async fn dropping_a_pooled_slice_returns_the_buffer_to_the_pool() {
+        tokio::time::pause();
+        let mut pool = pool(1, 8);
+
+        let slice: PooledSlice = pool.pop().await.into();
+        assert!(tokio::time::timeout(Duration::from_millis(50), pool.pop())
+            .await
+            .is_err());
+
+        drop(slice);
+        assert!(tokio::time::timeout(Duration::from_millis(50), pool.pop())
+            .await
+            .is_ok());
+    }
+}
