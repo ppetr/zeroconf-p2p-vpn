@@ -146,15 +146,13 @@ async fn main() -> Result<(), anyhow::Error> {
     };
     let tun_rx_loop = async {
         while let Some(packet) = rx_handle.recv().await {
-            let mut peer_opt = None;
-            // TODO: Handle Err.
-            if let Ok(slice) = tun::inet_slice(&packet.data) {
-                if let Some(dest_ip) = tun::destination_ip(&slice) {
-                    peer_opt = relay.get(&dest_ip);
-                    if peer_opt.is_none() {}
-                }
-            }
-            let icmp_packet: Option<_> = if let Some(peer) = peer_opt {
+            let icmp_packet: Option<_> = if let Some(peer) = tun::inet_slice(&packet.data)
+                .ok()
+                .as_ref()
+                .and_then(tun::destination_ip)
+                .as_ref()
+                .and_then(|dest_ip| relay.get(dest_ip))
+            {
                 match peer.send_packet(packet) {
                     Ok(icmp_packet) => icmp_packet,
                     Err(_) => None, // TODO: Handle errors.
