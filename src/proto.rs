@@ -129,3 +129,95 @@ pub async fn read_to_end(recv: &mut RecvStream, max_bytes: usize) -> Result<BufL
     }
     Ok(buffer_list)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use thin_status::ErrorCode;
+
+    fn status(code: i32, message: Option<&str>) -> v1::ControlResponse {
+        v1::ControlResponse {
+            status: Some(v1::Status {
+                code,
+                message: message.map(str::to_string),
+            }),
+        }
+    }
+
+    #[test]
+    fn control_to_status_is_ok_when_no_status_is_present() {
+        assert_eq!(
+            control_to_status(v1::ControlResponse { status: None }),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn default_control_response_maps_to_ok() {
+        // This is exactly what `read_control` writes back on the success path.
+        assert_eq!(control_to_status(v1::ControlResponse::default()), Ok(()));
+    }
+
+    #[test]
+    fn control_to_status_treats_zero_code_as_ok_even_with_a_message() {
+        assert_eq!(control_to_status(status(0, None)), Ok(()));
+        assert_eq!(control_to_status(status(0, Some("ignored"))), Ok(()));
+    }
+
+    #[test]
+    fn control_to_status_maps_a_known_nonzero_code_and_message_to_err() {
+        let err = control_to_status(status(ErrorCode::Internal as i32, Some("boom"))).unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::Internal));
+        assert_eq!(err.message(), "boom");
+    }
+
+    #[test]
+    fn control_to_status_uses_an_empty_message_when_none_is_given() {
+        let err = control_to_status(status(ErrorCode::Aborted as i32, None)).unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::Aborted));
+        assert_eq!(err.message(), "");
+    }
+
+    #[test]
+    fn control_to_status_passes_through_codes_that_are_not_known_error_codes() {
+        let err = control_to_status(status(9999, Some("weird"))).unwrap_err();
+        assert_eq!(err.code_raw().get(), 9999);
+        assert_eq!(err.code(), None);
+        assert_eq!(err.message(), "weird");
+
+        let negative = control_to_status(status(-7, None)).unwrap_err();
+        assert_eq!(negative.code_raw().get(), -7);
+        assert_eq!(negative.code(), None);
+    }
+
+    #[test]
+    fn status_to_control_serializes_code_and_message() {
+        let response = status_to_control(
+            ThinStatus::builder(ErrorCode::InvalidArgument)
+                .message("nope")
+                .build(),
+        );
+        let status = response.status.expect("status should be populated");
+        assert_eq!(status.code, ErrorCode::InvalidArgument as i32);
+        assert_eq!(status.message.as_deref(), Some("nope"));
+    }
+
+    #[test]
+    fn status_to_control_emits_an_empty_message_when_the_status_has_none() {
+        let response = status_to_control(ThinStatus::builder(ErrorCode::Aborted).build());
+        let status = response.status.expect("status should be populated");
+        assert_eq!(status.code, ErrorCode::Aborted as i32);
+        assert_eq!(status.message.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn status_survives_a_control_round_trip() {
+        let original = ThinStatus::builder(ErrorCode::DataLoss)
+            .message("half gone")
+            .build();
+        let restored = control_to_status(status_to_control(original.clone())).unwrap_err();
+        assert_eq!(restored.code(), Some(ErrorCode::DataLoss));
+        assert_eq!(restored.message(), "half gone");
+        assert_eq!(restored, original);
+    }
+}
