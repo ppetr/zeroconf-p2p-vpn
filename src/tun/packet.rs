@@ -314,4 +314,174 @@ mod tests {
         assert_eq!(buf.as_ref(), &expected[..]);
         assert_eq!(to_addr, IpAddr::from_str("2001:db8::fe1").unwrap());
     }
+
+    #[test]
+    fn empty_packet_is_rejected() {
+        let gateway = IcmpGateway::from_addr(IpAddr::from_str("8.8.4.4").unwrap());
+        let mut buf = BytesMut::with_capacity(64);
+        let err = gateway
+            .generate_reply(&mut buf, b"", IcmpType::unreachable_net())
+            .unwrap_err();
+        assert!(err.to_string().contains("Empty packet"));
+    }
+
+    #[test]
+    fn unparseable_packet_is_rejected() {
+        let gateway = IcmpGateway::from_addr(IpAddr::from_str("8.8.4.4").unwrap());
+        let mut buf = BytesMut::with_capacity(64);
+        assert!(gateway
+            .generate_reply(
+                &mut buf,
+                &[0xde, 0xad, 0xbe, 0xef],
+                IcmpType::unreachable_net()
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn ipv6_packet_without_an_ipv6_gateway_is_rejected() {
+        let gateway = IcmpGateway::from_addr(IpAddr::from_str("8.8.4.4").unwrap());
+        let mut buf = BytesMut::with_capacity(128);
+        let err = gateway
+            .generate_reply(&mut buf, &MOCK_IPV6_PACKET, IcmpType::unreachable_net())
+            .unwrap_err();
+        assert!(err.to_string().contains("No address configured"));
+    }
+
+    #[test]
+    fn ipv4_packet_without_an_ipv4_gateway_is_rejected() {
+        let gateway = IcmpGateway::from_addr(IpAddr::from_str("2001:db8::1").unwrap());
+        let mut buf = BytesMut::with_capacity(128);
+        let err = gateway
+            .generate_reply(&mut buf, &MOCK_IPV4_PACKET, IcmpType::unreachable_net())
+            .unwrap_err();
+        assert!(err.to_string().contains("No address configured"));
+    }
+
+    #[test]
+    fn reply_echoes_at_most_64_bytes_of_the_original_packet() {
+        let mut header = Ipv4Header {
+            total_len: (Ipv4Header::MIN_LEN + 80) as u16,
+            time_to_live: 64,
+            // Experimental protocol number: the parser keeps the rest as opaque payload
+            // instead of trying to decode a transport header out of the filler bytes.
+            protocol: etherparse::IpNumber(253),
+            source: [192, 168, 1, 10],
+            destination: [8, 8, 8, 8],
+            ..Default::default()
+        };
+        header.header_checksum = header.calc_header_checksum();
+        let mut input = header.to_bytes().to_vec();
+        input.extend((0..80).map(|i| i as u8));
+        assert_eq!(input.len(), 100);
+
+        let gateway = IcmpGateway::from_addr(IpAddr::from_str("8.8.4.4").unwrap());
+        let mut reply = BytesMut::with_capacity(256);
+        let to_addr = gateway
+            .generate_reply(&mut reply, &input, IcmpType::unreachable_net())
+            .unwrap();
+
+        // 20B IPv4 header + 8B ICMPv4 header + exactly 64 echoed bytes.
+        assert_eq!(reply.len(), 20 + 8 + 64);
+        assert_eq!(&reply[28..], &input[..64]);
+        assert_eq!(to_addr, IpAddr::from_str("192.168.1.10").unwrap());
+    }
+
+    #[test]
+    fn inet_slice_identifies_ipv4_ipv6_and_rejects_garbage() {
+        assert!(matches!(
+            inet_slice(&MOCK_IPV4_PACKET).unwrap(),
+            InternetSlice::Ipv4(_)
+        ));
+        assert!(matches!(
+            inet_slice(&MOCK_IPV6_PACKET).unwrap(),
+            InternetSlice::Ipv6(_)
+        ));
+        assert!(inet_slice(&[0xde, 0xad, 0xbe, 0xef]).is_err());
+    }
+
+    #[test]
+    fn destination_ip_reads_the_ipv4_destination() {
+        let slice = inet_slice(&MOCK_IPV4_PACKET).unwrap();
+        assert_eq!(
+            destination_ip(&slice),
+            Some(IpAddr::from_str("8.8.8.8").unwrap())
+        );
+    }
+
+    #[test]
+    fn destination_ip_reads_the_ipv6_destination() {
+        let slice = inet_slice(&MOCK_IPV6_PACKET).unwrap();
+        assert_eq!(
+            destination_ip(&slice),
+            Some(IpAddr::from_str("2001:db8::fe2").unwrap())
+        );
+    }
+
+    #[test]
+    fn destination_ip_is_none_for_arp() {
+        // htype=Ethernet, ptype=IPv4, hlen=6, plen=4, oper=request, then the four addresses.
+        const ARP: [u8; 28] = [
+            0x00, 0x01, 0x08, 0x00, 0x06, 0x04, 0x00, 0x01, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+            0x0a, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x02,
+        ];
+        let arp = etherparse::ArpPacketSlice::from_slice(&ARP).unwrap();
+        assert_eq!(destination_ip(&InternetSlice::Arp(arp)), None);
+    }
+
+    #[test]
+    fn from_addr_populates_only_the_matching_address_family() {
+        let v4 = IcmpGateway::from_addr(IpAddr::from_str("10.1.2.3").unwrap());
+        assert_eq!(v4.own_ipv4, Some(Ipv4Addr::new(10, 1, 2, 3)));
+        assert_eq!(v4.own_ipv6, None);
+
+        let v6 = IcmpGateway::from_addr(IpAddr::from_str("2001:db8::5").unwrap());
+        assert_eq!(
+            v6.own_ipv6,
+            Some(Ipv6Addr::from_str("2001:db8::5").unwrap())
+        );
+        assert_eq!(v6.own_ipv4, None);
+    }
+
+    #[test]
+    fn icmp_type_constructors_build_the_expected_variants() {
+        assert_eq!(
+            IcmpType::unreachable_net(),
+            IcmpType {
+                v4: Icmpv4Type::DestinationUnreachable(
+                    icmpv4::DestUnreachableHeader::NetworkUnknown
+                ),
+                v6: Icmpv6Type::DestinationUnreachable(icmpv6::DestUnreachableCode::NoRoute),
+            }
+        );
+        assert_eq!(
+            IcmpType::unreachable_host(),
+            IcmpType {
+                v4: Icmpv4Type::DestinationUnreachable(icmpv4::DestUnreachableHeader::Host),
+                v6: Icmpv6Type::DestinationUnreachable(icmpv6::DestUnreachableCode::Address),
+            }
+        );
+        assert_eq!(
+            IcmpType::packet_too_big(1400),
+            IcmpType {
+                v4: Icmpv4Type::DestinationUnreachable(
+                    icmpv4::DestUnreachableHeader::FragmentationNeeded { next_hop_mtu: 1400 }
+                ),
+                v6: Icmpv6Type::PacketTooBig { mtu: 1400 },
+            }
+        );
+        assert_ne!(IcmpType::unreachable_net(), IcmpType::unreachable_host());
+    }
+
+    #[test]
+    fn tx_packet_derefs_to_its_bytes_and_debug_never_panics() {
+        let valid = TxPacket::new(Bytes::copy_from_slice(&MOCK_IPV4_PACKET));
+        assert_eq!(&valid[..], &MOCK_IPV4_PACKET[..]);
+        assert!(format!("{valid:?}").contains("TxPacket"));
+
+        // `format_packet` takes the `Err` branch for an unparseable payload.
+        let garbage = TxPacket::new(Bytes::from_static(&[0xde, 0xad]));
+        assert_eq!(&garbage[..], &[0xde, 0xad]);
+        assert!(format!("{garbage:?}").contains("TxPacket"));
+    }
 }
