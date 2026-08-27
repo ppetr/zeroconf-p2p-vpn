@@ -26,3 +26,43 @@ pub fn is_tun_transient(err: &std::io::Error) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn transient_errnos_are_retryable() {
+        for errno in [
+            libc::EAGAIN,
+            libc::EINTR,
+            libc::EINVAL,
+            libc::EMSGSIZE,
+            libc::ENOBUFS,
+        ] {
+            assert!(
+                is_tun_transient(&Error::from_raw_os_error(errno)),
+                "errno {errno} should be treated as transient"
+            );
+        }
+    }
+
+    #[test]
+    fn unlisted_errnos_are_not_retryable() {
+        for errno in [libc::EPERM, libc::EACCES, libc::EPIPE, libc::ENOENT] {
+            assert!(
+                !is_tun_transient(&Error::from_raw_os_error(errno)),
+                "errno {errno} should not be treated as transient"
+            );
+        }
+    }
+
+    #[test]
+    fn errors_without_an_os_code_are_not_retryable() {
+        assert!(!is_tun_transient(&Error::new(
+            ErrorKind::Other,
+            "not an OS error"
+        )));
+    }
+}
