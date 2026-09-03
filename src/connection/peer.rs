@@ -99,6 +99,7 @@ impl PeerLinkHandle {
 }
 
 /// Accepts incoming connections.
+#[derive(Debug)]
 pub struct IncomingReceiver {
     conn_tx: mpsc::Sender<IrohConnection>,
     peer_id: EndpointId,

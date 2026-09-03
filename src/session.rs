@@ -1,0 +1,143 @@
+//! Per-peer supervision loop.
+//!
+//! `PeerSession` owns one `connection::PeerLinkHandle` and, for every connection that link yields,
+//! runs the handshake, registers the negotiated routes in the shared `Relay`, and pumps inbound
+//! datagrams to the TUN write side until the connection drops. It then withdraws the peer's routes
+//! and waits for the link to reconnect.
+//!
+//! This is the multi-peer generalization of what `main.rs` used to do inline for a single peer.
+//! Unlike that loop, a failure here (handshake, relay insert, receive loop) is logged and counted
+//! and the session keeps going, so one misbehaving peer can't take down the process.
+
+use std::net::IpAddr;
+use std::sync::Arc;
+
+use metrics::{counter, IntoLabels};
+use tokio::sync::mpsc;
+use tracing::{info, warn};
+
+use crate::connection::PeerLinkHandle;
+use crate::error::ExtractedErrorCode;
+use crate::peer::{self, CommonPeerConfig, ConnectedPeer};
+use crate::proto;
+use crate::relay::Relay;
+use crate::tun;
+
+/// Static per-peer configuration for a `PeerSession`.
+#[derive(Clone, Debug)]
+pub struct PeerSessionConfig {
+    /// Human-readable peer name from the configuration's `[peers]` table; used only for logs and
+    /// the `peer` metric label.
+    pub name: String,
+    pub common: Arc<CommonPeerConfig>,
+    pub advertise: proto::v1::Advertise,
+}
+
+/// Drives a single peer: reconnect loop, handshake, route registration, receive loop.
+pub struct PeerSession {
+    config: PeerSessionConfig,
+    link: PeerLinkHandle,
+    relay: Arc<Relay<ConnectedPeer>>,
+    tx_packet: mpsc::Sender<tun::TxPacket>,
+}
+
+impl PeerSession {
+    pub fn new(
+        config: PeerSessionConfig,
+        link: PeerLinkHandle,
+        relay: Arc<Relay<ConnectedPeer>>,
+        tx_packet: mpsc::Sender<tun::TxPacket>,
+    ) -> Self {
+        PeerSession {
+            config,
+            link,
+            relay,
+            tx_packet,
+        }
+    }
+
+    /// Runs until the underlying `PeerLink` task ends; on every other error it logs, counts, and
+    /// retries.
+    pub async fn run(mut self) {
+        let mut routes: Vec<IpAddr> = Vec::new();
+        loop {
+            let conn = match self.link.next_connection().await {
+                Ok(Some(conn)) => conn,
+                Ok(None) => {
+                    info!(peer = %self.config.name, "Peer disconnected");
+                    self.withdraw_routes(&mut routes).await;
+                    continue;
+                }
+                Err(err) => {
+                    // The internal `PeerLink` task is gone; this session can't recover.
+                    counter!(
+                        description: "Peer sessions stopped because their link task ended",
+                        "p2p_vpn_peer_session_link_ended",
+                        vec![metrics::Label::new("peer", self.config.name.clone())]
+                    )
+                    .increment(1);
+                    warn!(peer = %self.config.name, error = ?err,
+                          "Peer link task ended, stopping session");
+                    self.withdraw_routes(&mut routes).await;
+                    return;
+                }
+            };
+
+            info!(peer = %self.config.name, "Connected, starting the communication loop");
+            let peer_config = peer::PeerConfig {
+                common: self.config.common.clone(),
+                conn,
+                advertise: self.config.advertise.clone(),
+            };
+
+            let (mut connected, changed) = match peer::Peer::new(peer_config).handshake().await {
+                Ok(result) => result,
+                Err(err) => {
+                    self.count_error(
+                        "p2p_vpn_peer_session_handshake_errors",
+                        "Handshake failures in a peer session",
+                        &err,
+                    );
+                    warn!(peer = %self.config.name, error = ?err, "Handshake failed");
+                    continue;
+                }
+            };
+
+            if let Err(err) = self.relay.insert(&changed.0, connected.clone()).await {
+                self.count_error(
+                    "p2p_vpn_peer_session_relay_insert_errors",
+                    "Failures registering a peer's routes in the relay",
+                    &anyhow::Error::new(err),
+                );
+                warn!(peer = %self.config.name, "Failed to register peer routes in the relay");
+                continue;
+            }
+            routes = changed.0.clone();
+
+            if let Err(err) = connected.recv_loop(self.tx_packet.clone()).await {
+                self.count_error(
+                    "p2p_vpn_peer_session_recv_loop_errors",
+                    "Peer receive loop terminations with an error",
+                    &err,
+                );
+                warn!(peer = %self.config.name, error = ?err, "Receive loop ended with an error");
+            }
+
+            // The connection dropped: withdraw its routes and wait for the link to reconnect.
+            self.withdraw_routes(&mut routes).await;
+        }
+    }
+
+    async fn withdraw_routes(&self, routes: &mut Vec<IpAddr>) {
+        if !routes.is_empty() {
+            self.relay.remove(routes).await;
+            routes.clear();
+        }
+    }
+
+    fn count_error(&self, metric: &'static str, description: &'static str, err: &anyhow::Error) {
+        let mut labels = ExtractedErrorCode::from_anyhow(err).into_labels();
+        labels.push(metrics::Label::new("peer", self.config.name.clone()));
+        counter!(description: description, metric, labels).increment(1);
+    }
+}
