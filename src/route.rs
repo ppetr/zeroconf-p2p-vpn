@@ -121,10 +121,6 @@ impl ScopedRoute {
         Ok(Self { dest_ip })
     }
 
-    pub fn dest_ip(&self) -> &IpAddr {
-        &self.dest_ip
-    }
-
     /// Removes the route via `handle` and consumes `self`, returning the destination IP on
     /// success.
     ///

@@ -68,14 +68,6 @@ pub struct PeerLinkHandle {
 }
 
 impl PeerLinkHandle {
-    /// Returns a current, established `Connection`, if any.  Very fast, non-blocking.
-    ///
-    /// The `Connection` is created by either the `OutgoingConnectLoop` managed internally, or
-    /// submitted by `send_incoming`.
-    pub fn connection(&self) -> Option<Connection> {
-        self.watch_rx.borrow().as_ref().map(|c| c.conn.clone())
-    }
-
     /// Waits for a new connection to become available.
     ///
     /// `None` means that the previous connection has been closed and a new one hasn't been

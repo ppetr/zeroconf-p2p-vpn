@@ -176,6 +176,10 @@ impl IcmpType {
         }
     }
 
+    /// Host-unreachable (the peer is known, but there is currently no usable link to it) as
+    /// opposed to the network-unknown [`Self::unreachable_net`]. Meant for the reconnect gap,
+    /// when `PeerSession`'s link has dropped to `None`; not wired into `tun_rx_loop` yet.
+    #[allow(dead_code)]
     pub fn unreachable_host() -> Self {
         Self {
             v4: Icmpv4Type::DestinationUnreachable(icmpv4::DestUnreachableHeader::Host),
