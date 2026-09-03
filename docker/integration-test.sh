@@ -14,12 +14,12 @@ setup_file() {
     done
     echo " up" >&3
 
-    # Each node logs "My VPN address: <ipv6>" (WARN) once it has derived its address from its key.
-    # Discover them here so the tests don't hard-code the derived addresses.
+    # Ask each node for its own derived VPN address instead of hard-coding it: `show` is a pure
+    # function of the node's config + key, the same derivation the daemon uses for its Advertise.
     export ALICE_VPN BOB_VPN CHARLIE_VPN
-    ALICE_VPN="$(wait_for_vpn_addr node-alice)"
-    BOB_VPN="$(wait_for_vpn_addr node-bob)"
-    CHARLIE_VPN="$(wait_for_vpn_addr node-charlie)"
+    ALICE_VPN="$(vpn_addr node-alice)"
+    BOB_VPN="$(vpn_addr node-bob)"
+    CHARLIE_VPN="$(vpn_addr node-charlie)"
     echo "VPN addresses: alice=${ALICE_VPN} bob=${BOB_VPN} charlie=${CHARLIE_VPN}" >&3
 }
 
@@ -28,16 +28,9 @@ teardown_file() {
     docker compose down
 }
 
-# Prints the VPN IPv6 address a node logged, retrying for up to ~30s.
-wait_for_vpn_addr() {
-    local node="$1" addr=""
-    for _ in $(seq 30) ; do
-        addr="$(docker compose logs --no-color "${node}" 2>/dev/null \
-            | grep -oE 'My VPN address: [0-9a-fA-F:]+' | head -n1 | awk '{print $NF}')"
-        [ -n "${addr}" ] && break
-        sleep 1
-    done
-    echo "${addr}"
+# Prints a node's VPN IPv6 address, as reported by `zeroconf-p2p-vpn show` on its own config.
+vpn_addr() {
+    docker compose exec -T "$1" /zeroconf-p2p-vpn show config.toml | awk '/^VPN address:/ { print $3 }'
 }
 
 # A single ICMPv6 echo from a node to an address; returns ping's exit status.

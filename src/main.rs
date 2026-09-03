@@ -22,6 +22,7 @@ mod proto;
 mod relay;
 mod route;
 mod session;
+mod show;
 mod tun;
 
 fn get_metrics_addr() -> std::net::SocketAddr {
@@ -33,6 +34,17 @@ fn get_metrics_addr() -> std::net::SocketAddr {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
+    let args: Vec<String> = std::env::args().collect();
+    let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+    let config_path = match argv.as_slice() {
+        [_argv0, "show", config_path] => return show::run(config_path),
+        [_argv0, config_path] => *config_path,
+        _ => {
+            let prog = argv.first().copied().unwrap_or("zeroconf-p2p-vpn");
+            panic!("Usage: {prog} <config-file-path>\n       {prog} show <config-file-path>");
+        }
+    };
+
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt()
@@ -48,19 +60,8 @@ async fn main() -> Result<(), anyhow::Error> {
         .install()
         .expect("failed to install Prometheus metrics recorder/exporter");
 
-    let args: Vec<String> = std::env::args().collect();
-    let config_path = match args.as_slice() {
-        [_argv0, config_path] => config_path.clone(),
-        _ => panic!(
-            "Usage: {} <config-file-path>",
-            args.first()
-                .map(String::as_str)
-                .unwrap_or("zeroconf-p2p-vpn")
-        ),
-    };
-
     info!("Setting up a node");
-    let config = config::Config::load(&config_path)?;
+    let config = config::Config::load(config_path)?;
     let secret_key = load_key_from_disk(&config.private_key_path)?;
     info!("My public key: '{}'", secret_key.public().to_z32());
 
