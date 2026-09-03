@@ -311,14 +311,17 @@ mod tests {
     }
 
     /// Regression test for the config files actually used by `docker/docker-compose.yml` (part
-    /// of the two-node integration test), so a config-format change here can't silently break it.
+    /// of the integration test), so a config-format change here can't silently break it.
+    ///
+    /// Topology: Alice peers with both Bob and Charlie; Bob and Charlie each peer only with Alice.
     #[test]
     fn test_docker_compose_configs_parse() {
         let alice = Config::parse(include_str!("../docker/data/alice-config.toml"))
             .expect("docker/data/alice-config.toml should parse");
         assert_eq!(alice.private_key_path, PathBuf::from("keys/alice.raw"));
-        assert_eq!(alice.peers.len(), 1);
+        assert_eq!(alice.peers.len(), 2);
         assert!(alice.peers.contains_key("bob"));
+        assert!(alice.peers.contains_key("charlie"));
 
         let bob = Config::parse(include_str!("../docker/data/bob-config.toml"))
             .expect("docker/data/bob-config.toml should parse");
@@ -326,10 +329,20 @@ mod tests {
         assert_eq!(bob.peers.len(), 1);
         assert!(bob.peers.contains_key("alice"));
 
-        // The two nodes must be configured to be each other's peer.
+        let charlie = Config::parse(include_str!("../docker/data/charlie-config.toml"))
+            .expect("docker/data/charlie-config.toml should parse");
+        assert_eq!(charlie.private_key_path, PathBuf::from("keys/charlie.raw"));
+        assert_eq!(charlie.peers.len(), 1);
+        assert!(charlie.peers.contains_key("alice"));
+
+        // Each config must name the right peer by its actual public key.
         let alice_secret = SecretKey::from_bytes(include_bytes!("../docker/data/keys/alice.raw"));
         let bob_secret = SecretKey::from_bytes(include_bytes!("../docker/data/keys/bob.raw"));
+        let charlie_secret =
+            SecretKey::from_bytes(include_bytes!("../docker/data/keys/charlie.raw"));
         assert_eq!(alice.peers["bob"], bob_secret.public());
+        assert_eq!(alice.peers["charlie"], charlie_secret.public());
         assert_eq!(bob.peers["alice"], alice_secret.public());
+        assert_eq!(charlie.peers["alice"], alice_secret.public());
     }
 }

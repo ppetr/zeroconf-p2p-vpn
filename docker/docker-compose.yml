@@ -44,6 +44,28 @@ services:
       - /zeroconf-p2p-vpn
       - config.toml
 
+  node-charlie:
+    build:
+      context: ..
+      dockerfile: ./docker/Dockerfile
+    container_name: node_charlie
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      RUST_LOG: info,iroh=warn
+    networks:
+      vpn_test_net:
+        ipv4_address: 172.25.0.4
+    volumes:
+      - ./data/keys/charlie.raw:/keys/charlie.raw
+      - ./data/charlie-config.toml:/config.toml
+      - ../target/debug/zeroconf-p2p-vpn:/zeroconf-p2p-vpn
+    entrypoint:
+      - /zeroconf-p2p-vpn
+      - config.toml
+
 networks:
   vpn_test_net:
     driver: bridge

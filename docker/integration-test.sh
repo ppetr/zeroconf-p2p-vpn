@@ -8,16 +8,50 @@ setup_file() {
         docker compose logs
     }
 
-    echo -n "Waiting for tun0 in both nodes: " >&3
-    for node in node-{alice,bob} ; do
+    echo -n "Waiting for tun0 in all nodes: " >&3
+    for node in node-{alice,bob,charlie} ; do
         until docker compose exec -T "${node}" ip link show tun0 >/dev/null 2>&1 ; do echo -n "." >&3; sleep 1; done
     done
     echo " up" >&3
+
+    # Each node logs "My VPN address: <ipv6>" (WARN) once it has derived its address from its key.
+    # Discover them here so the tests don't hard-code the derived addresses.
+    export ALICE_VPN BOB_VPN CHARLIE_VPN
+    ALICE_VPN="$(wait_for_vpn_addr node-alice)"
+    BOB_VPN="$(wait_for_vpn_addr node-bob)"
+    CHARLIE_VPN="$(wait_for_vpn_addr node-charlie)"
+    echo "VPN addresses: alice=${ALICE_VPN} bob=${BOB_VPN} charlie=${CHARLIE_VPN}" >&3
 }
 
 teardown_file() {
     echo "~~~ Teardown ~~~" >&3
     docker compose down
+}
+
+# Prints the VPN IPv6 address a node logged, retrying for up to ~30s.
+wait_for_vpn_addr() {
+    local node="$1" addr=""
+    for _ in $(seq 30) ; do
+        addr="$(docker compose logs --no-color "${node}" 2>/dev/null \
+            | grep -oE 'My VPN address: [0-9a-fA-F:]+' | head -n1 | awk '{print $NF}')"
+        [ -n "${addr}" ] && break
+        sleep 1
+    done
+    echo "${addr}"
+}
+
+# A single ICMPv6 echo from a node to an address; returns ping's exit status.
+ping_once() {
+    docker compose exec -T "$1" ping -6 -c1 -W2 "$2"
+}
+
+# Retries ping_once for up to ~30s, for links that need the QUIC handshake to complete first.
+wait_ping() {
+    for _ in $(seq 30) ; do
+        ping_once "$1" "$2" >/dev/null 2>&1 && return 0
+        sleep 1
+    done
+    return 1
 }
 
 send_data() {
@@ -41,4 +75,27 @@ send_data() {
     echo -n "[3] Checking the output of 'wc': " >&3
     cat "$wc_file" >&3
     [ "$(<"$wc_file")" = "104857600" ]
+}
+
+@test "Alice and Bob ping each other" {
+    run wait_ping node-alice "$BOB_VPN"
+    [ "$status" -eq 0 ]
+    run wait_ping node-bob "$ALICE_VPN"
+    [ "$status" -eq 0 ]
+}
+
+@test "Alice and Charlie ping each other" {
+    run wait_ping node-alice "$CHARLIE_VPN"
+    [ "$status" -eq 0 ]
+    run wait_ping node-charlie "$ALICE_VPN"
+    [ "$status" -eq 0 ]
+}
+
+@test "Bob and Charlie cannot reach each other" {
+    # Bob and Charlie are not each other's peer, so neither has a route to the other's VPN
+    # address and the ping must fail.
+    run ping_once node-bob "$CHARLIE_VPN"
+    [ "$status" -ne 0 ]
+    run ping_once node-charlie "$BOB_VPN"
+    [ "$status" -ne 0 ]
 }
