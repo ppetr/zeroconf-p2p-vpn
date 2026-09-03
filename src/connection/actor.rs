@@ -55,11 +55,6 @@ impl<C: ManagedConnection> Actor<C> {
         }
     }
 
-    /// Allows callers to subscribe to connection changes.
-    pub fn subscribe(&self) -> watch::Receiver<Option<C>> {
-        self.watch_tx.subscribe()
-    }
-
     /// Both incoming and outgoing connections are submitted to this queue.
     pub fn connection_queue(&self) -> mpsc::Sender<C> {
         self.conn_tx.clone()
@@ -70,12 +65,10 @@ impl<C: ManagedConnection> Actor<C> {
         cancellation: CancellationToken,
     ) -> (ActorHandle<C>, JoinHandle<Result<(), ThinStatus>>) {
         let drop_guard = cancellation.clone().drop_guard();
-        let watch_rx = self.subscribe();
         let conn_tx = self.connection_queue();
         let handle = tokio::spawn(self.run(cancellation));
         (
             ActorHandle {
-                watch_rx,
                 conn_tx,
                 _drop_guard: Arc::new(drop_guard),
             },
@@ -153,7 +146,6 @@ impl<C: ManagedConnection> Actor<C> {
 
 #[derive(Clone, Debug)]
 pub struct ActorHandle<C: ManagedConnection> {
-    pub watch_rx: watch::Receiver<Option<C>>,
     pub conn_tx: mpsc::Sender<C>,
     _drop_guard: Arc<DropGuard>,
 }
@@ -228,12 +220,13 @@ mod tests {
 
     struct TestActor {
         actor: ActorHandle<FakeConnection>,
+        watch_rx: watch::Receiver<Option<FakeConnection>>,
         cancellation: CancellationToken,
     }
 
     impl TestActor {
         fn new(local_key: isize, remote_key: isize) -> Self {
-            let (watch_tx, _watch_rx) = watch::channel(None);
+            let (watch_tx, watch_rx) = watch::channel(None);
 
             let cancellation = CancellationToken::new();
 
@@ -242,6 +235,7 @@ mod tests {
 
             TestActor {
                 actor,
+                watch_rx,
                 cancellation,
             }
         }
@@ -258,7 +252,7 @@ mod tests {
         }
 
         fn receiver(&mut self) -> &mut watch::Receiver<Option<FakeConnection>> {
-            &mut self.actor.watch_rx
+            &mut self.watch_rx
         }
 
         async fn wait_for_connection(&mut self) -> Option<FakeConnection> {
