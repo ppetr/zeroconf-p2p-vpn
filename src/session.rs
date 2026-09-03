@@ -2,8 +2,9 @@
 //!
 //! `PeerSession` owns one `connection::PeerLinkHandle` and, for every connection that link yields,
 //! runs the handshake, registers the negotiated routes in the shared `Relay`, and pumps inbound
-//! datagrams to the TUN write side until the connection drops. It then withdraws the peer's routes
-//! and waits for the link to reconnect.
+//! datagrams to the TUN write side until the connection drops. It then parks the peer's routes
+//! (keeps them installed but marked offline, so `tun_rx_loop` answers ICMP host-unreachable) and
+//! waits for the link to reconnect. Routes are only fully withdrawn when the session ends.
 //!
 //! This is the multi-peer generalization of what `main.rs` used to do inline for a single peer.
 //! Unlike that loop, a failure here (handshake, relay insert, receive loop) is logged and counted
@@ -65,7 +66,7 @@ impl PeerSession {
                 Ok(Some(conn)) => conn,
                 Ok(None) => {
                     info!(peer = %self.config.name, "Peer disconnected");
-                    self.withdraw_routes(&mut routes).await;
+                    self.park_routes(&routes);
                     continue;
                 }
                 Err(err) => {
@@ -103,13 +104,21 @@ impl PeerSession {
                 }
             };
 
-            if let Err(err) = self.relay.insert(&changed.0, connected.clone()).await {
+            // Sync the relay to the freshly negotiated set: addresses the peer dropped since last
+            // time are withdrawn, the rest are re-armed in place without touching their routes.
+            if let Err(err) = self
+                .relay
+                .reconcile(&changed.0, &routes, connected.clone())
+                .await
+            {
                 self.count_error(
                     "p2p_vpn_peer_session_relay_insert_errors",
                     "Failures registering a peer's routes in the relay",
                     &anyhow::Error::new(err),
                 );
                 warn!(peer = %self.config.name, "Failed to register peer routes in the relay");
+                // `reconcile` rolled its batch back, so nothing of ours is left in the relay.
+                routes.clear();
                 continue;
             }
             routes = changed.0.clone();
@@ -123,15 +132,26 @@ impl PeerSession {
                 warn!(peer = %self.config.name, error = ?err, "Receive loop ended with an error");
             }
 
-            // The connection dropped: withdraw its routes and wait for the link to reconnect.
-            self.withdraw_routes(&mut routes).await;
+            // The connection dropped: park its routes (keep them installed, marked offline) and
+            // wait for the link to reconnect.
+            self.park_routes(&routes);
         }
     }
 
+    /// Fully withdraws the peer's routes from the relay (kernel route included). Used only when
+    /// the session itself is ending.
     async fn withdraw_routes(&self, routes: &mut Vec<IpAddr>) {
         if !routes.is_empty() {
             self.relay.remove(routes).await;
             routes.clear();
+        }
+    }
+
+    /// Marks the peer's routes offline for the reconnect gap, leaving `routes` populated so the
+    /// next handshake can diff against it and a later session end can withdraw them.
+    fn park_routes(&self, routes: &[IpAddr]) {
+        if !routes.is_empty() {
+            self.relay.park(routes);
         }
     }
 

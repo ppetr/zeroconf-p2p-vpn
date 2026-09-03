@@ -22,6 +22,19 @@ mod session;
 mod show;
 mod tun;
 
+/// Builds an ICMP error reply of `icmp_type` for `packet`, or `None` if one can't be produced.
+fn icmp_reply(
+    gateway: &tun::IcmpGateway,
+    packet: &tun::RxPacket,
+    icmp_type: tun::IcmpType,
+) -> Option<tun::TxPacket> {
+    let mut buf = bytes::BytesMut::with_capacity(128);
+    gateway
+        .generate_reply(&mut buf, packet, icmp_type)
+        .ok()
+        .map(|_| tun::TxPacket::new(buf.into()))
+}
+
 fn get_metrics_addr() -> std::net::SocketAddr {
     let port: u16 = env::var("METRICS_PORT")
         .map(|p| p.parse().expect("METRICS_PORT must be a valid u16 number"))
@@ -157,35 +170,36 @@ async fn main() -> Result<(), anyhow::Error> {
                 peer = tracing::field::Empty,
                 "Processing packet received from TUN"
             );
-            let icmp_packet: Option<_> = if let Some(peer) = tun::inet_slice(&packet.data)
+            let dest_ip = tun::inet_slice(&packet.data)
                 .ok()
                 .as_ref()
-                .and_then(tun::destination_ip)
-                .as_ref()
-                .and_then(|dest_ip| {
-                    tracing::record_all!(span, dest_ip = ?dest_ip);
-                    relay.get(dest_ip)
-                }) {
-                tracing::record_all!(span, peer = ?peer.public_key().to_z32());
-                match peer.send_packet(packet) {
-                    Ok(icmp_packet) => icmp_packet,
-                    Err(err) => {
-                        tracing::debug!(peer = ?peer.public_key().to_z32(), err = ?err,
-                                        "Error sending packet to peer");
-                        metrics::counter!(
-                            "p2p_vpn_tun_rx_loop_send_packet",
-                            error::ExtractedErrorCode::from_anyhow(&err).into_labels()
-                        )
-                        .increment(1);
-                        None
+                .and_then(tun::destination_ip);
+            if let Some(dest_ip) = &dest_ip {
+                tracing::record_all!(span, dest_ip = ?dest_ip);
+            }
+            let icmp_packet: Option<_> = match dest_ip.and_then(|ip| relay.get(&ip)) {
+                Some(relay::Dispatch::Connected(peer)) => {
+                    tracing::record_all!(span, peer = ?peer.public_key().to_z32());
+                    match peer.send_packet(packet) {
+                        Ok(icmp_packet) => icmp_packet,
+                        Err(err) => {
+                            tracing::debug!(peer = ?peer.public_key().to_z32(), err = ?err,
+                                            "Error sending packet to peer");
+                            metrics::counter!(
+                                "p2p_vpn_tun_rx_loop_send_packet",
+                                error::ExtractedErrorCode::from_anyhow(&err).into_labels()
+                            )
+                            .increment(1);
+                            None
+                        }
                     }
                 }
-            } else {
-                let mut buf = bytes::BytesMut::with_capacity(128);
-                icmp_gateway
-                    .generate_reply(&mut buf, &packet, tun::IcmpType::unreachable_net())
-                    .ok()
-                    .map(|_| tun::TxPacket::new(buf.into()))
+                // A known peer in its reconnect gap gets a host-unreachable reply.
+                Some(relay::Dispatch::Parked) => {
+                    icmp_reply(&icmp_gateway, &packet, tun::IcmpType::unreachable_host())
+                }
+                // A destination that belongs to no configured peer gets network-unknown.
+                None => icmp_reply(&icmp_gateway, &packet, tun::IcmpType::unreachable_net()),
             };
             if let Some(packet) = icmp_packet {
                 if let Err(err) = tx_handle.try_send(packet) {
