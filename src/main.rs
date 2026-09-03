@@ -78,9 +78,11 @@ async fn main() -> Result<(), anyhow::Error> {
         use_dht: false,
         use_mdns: true,
     };
-    let mut backoff = backoff::ExponentialBackoff::default();
-    backoff.max_elapsed_time = None;
-    let backoff = backoff;
+    // Retry outgoing connects forever (the default caps total elapsed time).
+    let backoff = backoff::ExponentialBackoff {
+        max_elapsed_time: None,
+        ..Default::default()
+    };
 
     let node = TransportNode::new(secret_key.clone(), alpn.to_vec(), &node_config).await?;
     let endpoint = node.endpoint();

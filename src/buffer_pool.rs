@@ -16,9 +16,7 @@ impl BufferPool {
         let (tx, rx) = mpsc::channel(count);
         capacity_gauge.set(count as u32);
         for _ in 0..count {
-            let mut v = Vec::with_capacity(buf_size);
-            v.resize(buf_size, 0);
-            tx.try_send(v.into_boxed_slice())
+            tx.try_send(vec![0u8; buf_size].into_boxed_slice())
                 .expect("when filling up BufferPool");
         }
         BufferPool {
