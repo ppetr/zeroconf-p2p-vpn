@@ -49,7 +49,7 @@ impl<T: Clone + Debug + Send + Sync + 'static, R: RoutingTable> Relay<T, R> {
         let locked = self.handle.lock().await;
         let locked = &locked;
         let value_ref = &value;
-        let result = try_join_all(dest_ips.into_iter().map(|ip| async move {
+        let result = try_join_all(dest_ips.iter().map(|ip| async move {
             // If this IP already has a route (e.g. we're re-inserting it for a reconnected
             // peer), remove it first. The new `ScopedRoute` below targets the exact same
             // OS-level route (same destination, same routing table), so inserting the new one
@@ -60,7 +60,7 @@ impl<T: Clone + Debug + Send + Sync + 'static, R: RoutingTable> Relay<T, R> {
                                     "Error removing the route being replaced");
                 }
             }
-            let result = ScopedRoute::new(&**locked, (*ip).clone()).await;
+            let result = ScopedRoute::new(&**locked, *ip).await;
             match result {
                 Err(err) => {
                     tracing::error!(error = ?err, dest_ip = ?ip, peer = ?value_ref.clone(),
@@ -69,7 +69,7 @@ impl<T: Clone + Debug + Send + Sync + 'static, R: RoutingTable> Relay<T, R> {
                 }
                 Ok(scoped) => {
                     self.peer_map.insert(
-                        (*ip).clone(),
+                        *ip,
                         PeerValue {
                             value: value_ref.clone(),
                             route: scoped,
@@ -97,27 +97,28 @@ impl<T: Clone + Debug + Send + Sync + 'static, R: RoutingTable> Relay<T, R> {
 
     pub async fn remove(&self, dest_ips: &[IpAddr]) {
         let _span = tracing::info_span!("p2p_vpn_relay_remove");
-        self.remove_locked(&mut self.handle.lock().await, dest_ips)
+        self.remove_locked(&self.handle.lock().await, dest_ips)
             .await
     }
 
     async fn remove_locked(&self, locked: &MutexGuard<'_, R>, dest_ips: &[IpAddr]) {
-        let _ = join_all(dest_ips.into_iter().map(|ip| async {
+        let _ = join_all(dest_ips.iter().map(|ip| async move {
             // Prefer removing via the tracked `ScopedRoute` if we have one: it's the same route
             // `insert` created. If there's no entry (e.g. rolling back an `insert` whose
             // `ScopedRoute::new` itself failed), fall back to a best-effort direct removal in
             // case the OS partially applied it anyway.
             let result = match self.peer_map.remove(ip) {
                 Some((_, old)) => old.route.drop_async(&**locked).await.map(|_ip| ()),
-                None => locked.remove((*ip).clone()).await,
+                None => locked.remove(*ip).await,
             };
             if let Err(err) = &result {
-                tracing::error!(error = ?err, dest_ip = ?(*ip).clone(),
+                tracing::error!(error = ?err, dest_ip = ?ip,
                     "Errors removing route to the system routing tables");
-                let _ = metrics::counter!(
+                metrics::counter!(
                     "p2p_vpn_relay_remove_errors",
                     ExtractedErrorCode::from_io(err).into_labels()
-                );
+                )
+                .increment(1);
             }
         }))
         .await;
