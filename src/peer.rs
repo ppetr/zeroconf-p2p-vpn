@@ -1,4 +1,4 @@
-use anyhow::{Context, Error, Result};
+use anyhow::{Context, Result};
 use bytes::Bytes;
 use ipnet::IpNet;
 use iroh::endpoint::Connection;
@@ -144,11 +144,9 @@ impl Peer {
     pub async fn handshake(self) -> Result<(ConnectedPeer, RoutesChanged)> {
         wait_for_direct(&self.config.conn).await?;
         let handshake = async {
-            let send = self.send_advertise();
-            let receive = self.recv_control();
-            let (send, receive) = tokio::join!(send, receive);
+            let (send, receive) = tokio::join!(self.send_advertise(), self.recv_control());
             send?;
-            Ok::<_, Error>(receive?)
+            receive
         };
         let handshake = timeout(self.config.common.handshake_timeout, handshake)
             .await
