@@ -150,11 +150,12 @@ impl Peer {
             send?;
             Ok::<_, Error>(receive?)
         };
-        let (handshake,) = tokio::join!(timeout(self.config.common.handshake_timeout, handshake));
-        let handshake = handshake.context(format!(
-            "Failed to finish handshake within the deadline {:?}",
-            self.config.common.handshake_timeout
-        ))??;
+        let handshake = timeout(self.config.common.handshake_timeout, handshake)
+            .await
+            .context(format!(
+                "Failed to finish handshake within the deadline {:?}",
+                self.config.common.handshake_timeout
+            ))??;
         let routes = match handshake {
             Some(routes) => routes,
             None => anyhow::bail!("Handshake returned no routes"),
@@ -210,35 +211,27 @@ impl Peer {
         &self,
         request: &ControlRequest,
     ) -> Result<Option<RoutesChanged>, ThinStatus> {
-        let mut addr_errors = Vec::new();
-        match &request.command {
-            Some(control_request::Command::Advertise(a)) => {
-                let (addrs, errors) = validate_addr::validate_addresses(
-                    &self.config.common.allowed_networks,
-                    &a,
-                    &self.public_key(),
-                );
-                if !errors.is_empty() {
-                    tracing::info!(peer = self.public_key().to_z32(), errors = ?errors, "Errors parsing peer addresses");
-                    addr_errors = errors;
-                }
-                let mut new_routes = Vec::new();
-                new_routes.reserve(addrs.len());
-                for a in addrs {
-                    new_routes.push(a.addr());
-                }
-                if new_routes.is_empty() {
-                    let mut status = ThinStatus::builder(ErrorCode::FailedPrecondition);
-                    let _ = write!(status, "No available routes to the peer; {:?}", addr_errors);
-                    let status = status.build();
-                    proto::close_connection(&self.config.conn, &status);
-                    return Err(status);
-                }
-                return Ok(Some(RoutesChanged(new_routes)));
-            }
-            None => (),
+        let Some(control_request::Command::Advertise(advertise)) = &request.command else {
+            return Ok(None);
         };
-        Ok(None)
+        let (addrs, addr_errors) = validate_addr::validate_addresses(
+            &self.config.common.allowed_networks,
+            advertise,
+            &self.public_key(),
+        );
+        if !addr_errors.is_empty() {
+            tracing::info!(peer = self.public_key().to_z32(), errors = ?addr_errors,
+                "Errors parsing peer addresses");
+        }
+        let new_routes: Vec<IpAddr> = addrs.iter().map(|net| net.addr()).collect();
+        if new_routes.is_empty() {
+            let mut status = ThinStatus::builder(ErrorCode::FailedPrecondition);
+            let _ = write!(status, "No available routes to the peer; {:?}", addr_errors);
+            let status = status.build();
+            proto::close_connection(&self.config.conn, &status);
+            return Err(status);
+        }
+        Ok(Some(RoutesChanged(new_routes)))
     }
 }
 
@@ -286,9 +279,8 @@ impl ConnectedPeer {
     /// Processes control messages until one that updates routing is received.
     pub async fn recv_control_loop(&self) -> Result<RoutesChanged> {
         loop {
-            match self.peer.recv_control().await? {
-                Some(routes) => return Ok(routes),
-                None => (),
+            if let Some(routes) = self.peer.recv_control().await? {
+                return Ok(routes);
             }
         }
     }
