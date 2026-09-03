@@ -1,7 +1,7 @@
 use anyhow::{Context, Error, Result};
 use bytes::Bytes;
 use ipnet::IpNet;
-use iroh::endpoint::{Connection, VarInt};
+use iroh::endpoint::Connection;
 use iroh::PublicKey;
 use metrics::*;
 use secure_p2p_transport::wait_for_direct;
@@ -231,7 +231,7 @@ impl Peer {
                     let mut status = ThinStatus::builder(ErrorCode::FailedPrecondition);
                     let _ = write!(status, "No available routes to the peer; {:?}", addr_errors);
                     let status = status.build();
-                    self.send_disconnect(&status);
+                    proto::close_connection(&self.config.conn, &status);
                     return Err(status);
                 }
                 return Ok(Some(RoutesChanged(new_routes)));
@@ -239,13 +239,6 @@ impl Peer {
             None => (),
         };
         Ok(None)
-    }
-
-    fn send_disconnect(&self, status: &ThinStatus) {
-        self.config.conn.close(
-            VarInt::from_u32(i32::from(status.code_raw()) as u32),
-            status.message().as_bytes(),
-        )
     }
 }
 
@@ -304,6 +297,7 @@ impl ConnectedPeer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroh::endpoint::VarInt;
 
     #[tokio::test]
     async fn handshake_exchanges_routes() {

@@ -22,6 +22,16 @@ pub use p2p_vpn::control::v1;
 
 const MAX_MESSAGE_SIZE: usize = 2048;
 
+/// Close `conn` at the QUIC layer, carrying `status`'s code and message in the connection-close
+/// frame. This is what the peer reads back as a `ThinStatus` when its own in-flight request
+/// resolves with a connection-closed error.
+pub fn close_connection(conn: &Connection, status: &ThinStatus) {
+    conn.close(
+        VarInt::from_u32(i32::from(status.code_raw()) as u32),
+        status.message().as_bytes(),
+    );
+}
+
 fn status_to_control(status: ThinStatus) -> v1::ControlResponse {
     v1::ControlResponse {
         status: Some(v1::Status {

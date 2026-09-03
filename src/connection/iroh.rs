@@ -1,4 +1,4 @@
-use iroh::endpoint::{ConnectError, Connection, Endpoint, Side, VarInt};
+use iroh::endpoint::{ConnectError, Connection, Endpoint, Side};
 use iroh::EndpointId;
 use std::sync::Arc;
 use thin_status::ThinStatus;
@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 
 use super::actor::*;
 use super::connect::*;
+use crate::proto;
 
 #[derive(Clone, Debug)]
 pub struct IrohConnection {
@@ -30,10 +31,7 @@ impl ManagedConnection for IrohConnection {
     }
 
     fn close(self, status: ThinStatus) {
-        self.conn.close(
-            VarInt::from_u32(i32::from(status.code_raw()) as u32),
-            status.message().as_bytes(),
-        )
+        proto::close_connection(&self.conn, &status);
     }
 
     fn spawn_closed_watcher(&self, on_close: mpsc::Sender<Self::ConnectionId>) {
