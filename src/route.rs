@@ -28,21 +28,20 @@ impl RoutingTable for NetRouteHandle {
 
         let route = self.route_entry(dest_ip);
         self.handle.add(&route).instrument(span).await?;
-        metrics::gauge!("p2p_vpn_route_add",
-            "ip" => if dest_ip.is_ipv6() { "v6" } else { "v4" })
-        .increment(1);
+        let ip = if dest_ip.is_ipv6() { "v6" } else { "v4" };
+        metrics::counter!("p2p_vpn_route_add_total", "ip" => ip).increment(1);
+        metrics::gauge!("p2p_vpn_route_active", "ip" => ip).increment(1);
         Ok(())
     }
 
     /// Unregister a route to the stored interface in the system routing table.
     async fn remove(&self, dest_ip: IpAddr) -> Result<(), std::io::Error> {
-        let span = info_span!("route_del", %dest_ip, self.if_index);
+        let span = info_span!("p2p_vpn_route_del", %dest_ip, self.if_index);
 
         let route = self.route_entry(dest_ip);
         self.handle.delete(&route).instrument(span).await?;
-        metrics::gauge!("p2p_vpn_route_route_active",
-            "ip" => if dest_ip.is_ipv6() { "v6" } else { "v4" })
-        .decrement(1);
+        let ip = if dest_ip.is_ipv6() { "v6" } else { "v4" };
+        metrics::gauge!("p2p_vpn_route_active", "ip" => ip).decrement(1);
         Ok(())
     }
 }
