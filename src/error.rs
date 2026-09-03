@@ -1,5 +1,3 @@
-use anyhow;
-use metrics;
 use std::io::ErrorKind;
 use thin_status::*;
 

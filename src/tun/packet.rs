@@ -197,7 +197,6 @@ impl IcmpType {
 mod tests {
     use super::*;
     use bytes::BytesMut;
-    #[allow(unused_imports)]
     use std::str::FromStr;
 
     // Minimal valid IPv4 UDP packet (20B IP + 8B UDP)

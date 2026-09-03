@@ -1,5 +1,3 @@
-use libc;
-
 macro_rules! match_libc_errors {
     ($os_err:expr, $($error:ident),* $(,)?) => {
         match $os_err {

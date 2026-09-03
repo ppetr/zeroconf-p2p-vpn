@@ -1,5 +1,4 @@
 use etherparse::{IpEcn, IpHeaders};
-use rand;
 
 /// Packet routing outcome for the VPN engine
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
