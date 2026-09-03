@@ -42,7 +42,8 @@ pub fn control_to_status(response: v1::ControlResponse) -> Result<(), ThinStatus
     }
 }
 
-/// Wait for an unidirectional stream and accept a `v1::ControlRequest` message from it.
+/// Accept a bidirectional stream, read a `v1::ControlRequest` from it, run `f`, and send `f`'s
+/// outcome back as a `v1::ControlResponse` on the same stream.
 pub async fn read_control<F, R>(conn: &Connection, f: F) -> Result<R, ThinStatus>
 where
     F: AsyncFnOnce(v1::ControlRequest) -> Result<R, ThinStatus>,
@@ -83,7 +84,7 @@ async fn read_control_stream<P: Message + Debug + Default>(stream: &mut RecvStre
     Ok(control?)
 }
 
-/// Open an unidirectional stream and send a `v1::ControlRequest` message to it.
+/// Open a bidirectional stream, send `control` on it, and read back the peer's `v1::ControlResponse`.
 pub async fn write_control(
     conn: &Connection,
     control: &v1::ControlRequest,
@@ -93,7 +94,8 @@ pub async fn write_control(
     read_control_stream(&mut recv).await
 }
 
-/// Send a `v1::ControlRequest` message to a `SendStream`.
+/// Encode `message` and write it to `send`, then wait for the peer to acknowledge receipt of the
+/// whole stream.
 pub async fn write_control_stream<P: Message>(mut send: SendStream, message: &P) -> Result<()> {
     let mut buf = Vec::with_capacity(MAX_MESSAGE_SIZE);
     message.encode(&mut buf)?;

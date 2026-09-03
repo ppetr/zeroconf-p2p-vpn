@@ -117,7 +117,8 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // TODO: Cancellation.
     let root_cancel = CancellationToken::new();
-    let relay = Arc::new(relay::Relay::new(net_route_handle.clone()));
+    let relay: Arc<relay::Relay<peer::ConnectedPeer>> =
+        Arc::new(relay::Relay::new(net_route_handle.clone()));
     let mut incoming_router = connection::IncomingRouter::new();
     let mut links = Vec::with_capacity(config.peers.len());
     for (name, peer_key) in &config.peers {

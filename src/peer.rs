@@ -76,7 +76,11 @@ impl Peer {
         self.config.conn.remote_id()
     }
 
-    /// See `ConnectedPeer::send_packet`.
+    /// Send a packet to the peer over the QUIC connection.
+    ///
+    /// Synchronous and non-blocking: if the packet exceeds the connection's datagram MTU, or the
+    /// datagram send buffer is under enough backpressure that the ECN/AQM logic drops it, an ICMP
+    /// reply for the caller is returned instead (or `None` if none could be built).
     fn send_packet(&self, packet: tun::RxPacket) -> Result<Option<tun::TxPacket>, anyhow::Error> {
         // TODO: Check networks etc.
         // Check the datagram size; if it's larger than the QUIC limit, attempt to negotiate it.
@@ -278,12 +282,7 @@ impl ConnectedPeer {
         }
     }
 
-    /// Send a packet to the peer. If the packet is too large, an ICMP response packet is returned
-    /// to the caller instead.
-    ///
-    /// This method is synchronous: If the Quinn connection can't handle the packet, a
-    /// corresponding ICMP packet is returned instead (or dropped, if the sender doesn't support
-    /// it).
+    /// See [`Peer::send_packet`].
     pub fn send_packet(
         &self,
         packet: tun::RxPacket,
