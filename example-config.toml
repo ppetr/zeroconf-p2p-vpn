@@ -10,3 +10,11 @@ private_key_path = "/foo/bar"
 # z32-encoded Ed25519 keys of allowed peers.
 alice = "ri5s1riaxztowkfasg645kdngnugembhsjwke5qfrktno9qjn8ty"
 bob = "..."
+
+[tun]
+# Name of the OS-level TUN network interface. If missing or empty, the
+# OS/driver picks a unique name automatically (e.g. "tun0" on Linux).
+# name = "zeroconf-p2p-vpn"
+# Human-readable interface description (Windows only). Defaults to a
+# built-in description if missing.
+# description = "zeroconf-p2p-vpn VPN interface"

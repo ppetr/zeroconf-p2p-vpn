@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 
 use crate::addr::MAX_SUBNET;
 
+/// Default interface description used when `[tun] description` is not set.
+const DEFAULT_TUN_DESCRIPTION: &str = "zeroconf-p2p-vpn VPN interface";
+
 /// A fully parsed and validated configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
@@ -18,6 +21,19 @@ pub struct Config {
     pub private_key_path: PathBuf,
     /// Allowed peers' public keys, keyed by their name (the `[peers]` table key).
     pub peers: HashMap<String, PublicKey>,
+    /// TUN device settings, from `[tun]`.
+    pub tun: TunConfig,
+}
+
+/// Settings for the OS-level TUN network interface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TunConfig {
+    /// The interface name, from `[tun] name`. `None` lets the OS/driver pick a unique name
+    /// automatically.
+    pub name: Option<String>,
+    /// The interface's human-readable description (Windows only), from `[tun] description`.
+    /// Defaults to [`DEFAULT_TUN_DESCRIPTION`] if unset.
+    pub description: String,
 }
 
 impl Config {
@@ -47,6 +63,8 @@ struct RawConfig {
     host: RawHost,
     #[serde(default)]
     peers: HashMap<String, String>,
+    #[serde(default)]
+    tun: RawTun,
 }
 
 #[derive(Deserialize)]
@@ -54,6 +72,14 @@ struct RawHost {
     #[serde(default)]
     subnet: u16,
     private_key_path: PathBuf,
+}
+
+#[derive(Deserialize, Default)]
+struct RawTun {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
 }
 
 impl TryFrom<RawConfig> for Config {
@@ -80,6 +106,13 @@ impl TryFrom<RawConfig> for Config {
             subnet: raw.host.subnet,
             private_key_path: raw.host.private_key_path,
             peers,
+            tun: TunConfig {
+                name: raw.tun.name,
+                description: raw
+                    .tun
+                    .description
+                    .unwrap_or_else(|| DEFAULT_TUN_DESCRIPTION.to_string()),
+            },
         })
     }
 }
@@ -116,6 +149,44 @@ mod tests {
         assert_eq!(config.private_key_path, PathBuf::from("/foo/bar"));
         assert_eq!(config.peers.len(), 1);
         assert_eq!(config.peers["alice"], PublicKey::from_z32(&alice).unwrap());
+        assert_eq!(
+            config.tun.name, None,
+            "a missing [tun] section must leave the interface name unset"
+        );
+        assert_eq!(config.tun.description, DEFAULT_TUN_DESCRIPTION);
+    }
+
+    #[test]
+    fn test_parses_tun_section() {
+        let toml = r#"
+            [host]
+            private_key_path = "/foo/bar"
+
+            [tun]
+            name = "zeroconf-p2p-vpn"
+            description = "My VPN interface"
+        "#;
+
+        let config = Config::parse(toml).expect("valid config should parse");
+
+        assert_eq!(config.tun.name, Some("zeroconf-p2p-vpn".to_string()));
+        assert_eq!(config.tun.description, "My VPN interface");
+    }
+
+    #[test]
+    fn test_tun_description_defaults_when_only_name_is_set() {
+        let toml = r#"
+            [host]
+            private_key_path = "/foo/bar"
+
+            [tun]
+            name = "zeroconf-p2p-vpn"
+        "#;
+
+        let config = Config::parse(toml).expect("valid config should parse");
+
+        assert_eq!(config.tun.name, Some("zeroconf-p2p-vpn".to_string()));
+        assert_eq!(config.tun.description, DEFAULT_TUN_DESCRIPTION);
     }
 
     #[test]

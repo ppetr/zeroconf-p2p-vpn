@@ -80,7 +80,7 @@ async fn main() -> Result<(), anyhow::Error> {
         return Ok(());
     }
 
-    let tun = tun::Tun::new(None).await?;
+    let tun = tun::Tun::new(config.tun.name.as_deref(), &config.tun.description).await?;
     info!("TUN device {} opened.", tun.if_name);
 
     let net_route_handle = route::NetRouteHandle::new(tun.if_index())?;

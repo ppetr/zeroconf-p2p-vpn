@@ -25,13 +25,17 @@ pub struct Tun {
 }
 
 impl Tun {
-    pub async fn new(if_name: Option<&str>) -> Result<Tun> {
+    /// Creates the TUN device. `if_name` is the OS-level interface name; `None` lets the OS/driver
+    /// pick a unique one automatically. `description` is the human-readable interface description
+    /// (Windows only; ignored elsewhere).
+    pub async fn new(if_name: Option<&str>, description: &str) -> Result<Tun> {
         let builder = DeviceBuilder::new();
         let builder = if let Some(name) = if_name {
             builder.name(name)
         } else {
             builder
         };
+        let builder = Self::with_description(builder, description);
         let dev = builder
             .build_async()
             .context("Failed to convert TUN device into async device")?;
@@ -42,6 +46,16 @@ impl Tun {
             if_name: name,
             if_index,
         })
+    }
+
+    #[cfg(windows)]
+    fn with_description(builder: DeviceBuilder, description: &str) -> DeviceBuilder {
+        builder.description(description)
+    }
+
+    #[cfg(not(windows))]
+    fn with_description(builder: DeviceBuilder, _description: &str) -> DeviceBuilder {
+        builder
     }
 
     pub fn if_index(&self) -> u32 {
