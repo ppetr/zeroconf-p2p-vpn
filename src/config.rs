@@ -2,6 +2,7 @@
 
 use anyhow::{bail, Context, Result};
 use iroh::PublicKey;
+use secure_p2p_transport::NodeExtraConfig;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -23,6 +24,9 @@ pub struct Config {
     pub peers: HashMap<String, PublicKey>,
     /// TUN device settings, from `[tun]`.
     pub tun: TunConfig,
+    /// Peer discovery settings, from `[discovery]`. Defaults to the n0.computer relay plus mDNS
+    /// and the DHT (`NodeExtraConfig::default()`).
+    pub discovery: NodeExtraConfig,
 }
 
 /// Settings for the OS-level TUN network interface.
@@ -65,6 +69,8 @@ struct RawConfig {
     peers: HashMap<String, String>,
     #[serde(default)]
     tun: RawTun,
+    #[serde(default)]
+    discovery: NodeExtraConfig,
 }
 
 #[derive(Deserialize)]
@@ -113,6 +119,7 @@ impl TryFrom<RawConfig> for Config {
                     .description
                     .unwrap_or_else(|| DEFAULT_TUN_DESCRIPTION.to_string()),
             },
+            discovery: raw.discovery,
         })
     }
 }
@@ -121,6 +128,7 @@ impl TryFrom<RawConfig> for Config {
 mod tests {
     use super::*;
     use iroh::SecretKey;
+    use secure_p2p_transport::N0Discovery;
 
     /// The real "alice" public key from `docker/docker-compose.yml`, kept as a string literal so
     /// these tests don't depend on other files in the repository.
@@ -154,6 +162,57 @@ mod tests {
             "a missing [tun] section must leave the interface name unset"
         );
         assert_eq!(config.tun.description, DEFAULT_TUN_DESCRIPTION);
+        assert_eq!(
+            config.discovery,
+            NodeExtraConfig::default(),
+            "a missing [discovery] section must default to the n0.computer relay plus mDNS and the DHT"
+        );
+    }
+
+    #[test]
+    fn test_parses_discovery_section() {
+        let toml = r#"
+            [host]
+            private_key_path = "/foo/bar"
+
+            [discovery]
+            n0_discovery = "NoN0"
+            use_mdns = true
+            use_dht = false
+        "#;
+
+        let config = Config::parse(toml).expect("valid config should parse");
+
+        assert_eq!(
+            config.discovery,
+            NodeExtraConfig {
+                n0_discovery: N0Discovery::NoN0,
+                use_mdns: true,
+                use_dht: false,
+            }
+        );
+    }
+
+    #[test]
+    fn test_discovery_section_allows_partial_overrides() {
+        let toml = r#"
+            [host]
+            private_key_path = "/foo/bar"
+
+            [discovery]
+            use_dht = false
+        "#;
+
+        let config = Config::parse(toml).expect("a [discovery] section may set only some fields");
+
+        assert_eq!(
+            config.discovery,
+            NodeExtraConfig {
+                use_dht: false,
+                ..NodeExtraConfig::default()
+            },
+            "unset fields must fall back to NodeExtraConfig::default()"
+        );
     }
 
     #[test]
@@ -415,5 +474,15 @@ mod tests {
         assert_eq!(alice.peers["charlie"], charlie_secret.public());
         assert_eq!(bob.peers["alice"], alice_secret.public());
         assert_eq!(charlie.peers["alice"], alice_secret.public());
+
+        // The integration test must stay local-network-only: no n0.computer relay, no DHT.
+        let local_only = NodeExtraConfig {
+            n0_discovery: N0Discovery::NoN0,
+            use_mdns: true,
+            use_dht: false,
+        };
+        assert_eq!(alice.discovery, local_only);
+        assert_eq!(bob.discovery, local_only);
+        assert_eq!(charlie.discovery, local_only);
     }
 }

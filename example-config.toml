@@ -18,3 +18,16 @@ bob = "..."
 # Human-readable interface description (Windows only). Defaults to a
 # built-in description if missing.
 # description = "zeroconf-p2p-vpn VPN interface"
+
+[discovery]
+# Peer discovery settings. If this section is missing entirely, all three
+# fields default to using the n0.computer relay plus mDNS and the DHT (the
+# most permissive, "just works" configuration).
+#
+# One of "Full" (use the n0.computer relay), "DisableRelay" (use n0.computer
+# only for discovery, not relaying) or "NoN0" (rely on mDNS/DHT only).
+# n0_discovery = "Full"
+# Discover peers on the local network via mDNS.
+# use_mdns = true
+# Discover peers via the BitTorrent-style DHT.
+# use_dht = true

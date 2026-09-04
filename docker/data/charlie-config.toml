@@ -3,3 +3,9 @@ private_key_path = "keys/charlie.raw"
 
 [peers]
 alice = "ri5s1riaxztowkfasg645kdngnugembhsjwke5qfrktno9qjn8ty"
+
+[discovery]
+# Local-network-only: don't contact the n0.computer relay or the public DHT.
+n0_discovery = "NoN0"
+use_mdns = true
+use_dht = false

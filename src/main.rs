@@ -1,6 +1,6 @@
 use futures_util::future::join_all;
 use metrics::IntoLabels;
-use secure_p2p_transport::{load_key_from_disk, N0Discovery, NodeExtraConfig, TransportNode};
+use secure_p2p_transport::{load_key_from_disk, TransportNode};
 use std::env;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -86,18 +86,13 @@ async fn main() -> Result<(), anyhow::Error> {
     let net_route_handle = route::NetRouteHandle::new(tun.if_index())?;
 
     let alpn = Arc::new(b"zeroconf-p2p-vpn/vpn/1.0".to_vec());
-    let node_config = NodeExtraConfig {
-        n0_discovery: N0Discovery::NoN0,
-        use_dht: false,
-        use_mdns: true,
-    };
     // Retry outgoing connects forever (the default caps total elapsed time).
     let backoff = backoff::ExponentialBackoff {
         max_elapsed_time: None,
         ..Default::default()
     };
 
-    let node = TransportNode::new(secret_key.clone(), alpn.to_vec(), &node_config).await?;
+    let node = TransportNode::new(secret_key.clone(), alpn.to_vec(), &config.discovery).await?;
     let endpoint = node.endpoint();
 
     let (rx_uring, mut rx_handle) = mpsc::channel::<tun::RxPacket>(64);
