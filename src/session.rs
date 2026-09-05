@@ -13,9 +13,10 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
+use iroh::endpoint::Connection;
 use metrics::{counter, IntoLabels};
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::{info, info_span, warn, Instrument};
 
 use crate::connection::PeerLinkHandle;
 use crate::error::ExtractedErrorCode;
@@ -84,58 +85,79 @@ impl PeerSession {
                 }
             };
 
-            info!(peer = %self.config.name, "Connected, starting the communication loop");
-            let peer_config = peer::PeerConfig {
-                common: self.config.common.clone(),
-                conn,
-                advertise: self.config.advertise.clone(),
-            };
+            let remote_addr = peer::remote_addr(&conn)
+                .map(|addr| addr.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            // Spans a whole connection's lifetime with the same fields, so that the `enter`/`close`
+            // events tracing_subscriber emits for it (see `main.rs`) double as connect/disconnect
+            // log lines for free, without a matching explicit log call at the other end.
+            let span = info_span!("peer_connection", peer = %self.config.name, %remote_addr);
+            self.run_connection(conn, &remote_addr, &mut routes)
+                .instrument(span)
+                .await;
+        }
+    }
 
-            let (mut connected, changed) = match peer::Peer::new(peer_config).handshake().await {
-                Ok(result) => result,
-                Err(err) => {
-                    self.count_error(
-                        "p2p_vpn_peer_session_handshake_errors",
-                        "Handshake failures in a peer session",
-                        &err,
-                    );
-                    warn!(peer = %self.config.name, error = ?err, "Handshake failed");
-                    continue;
-                }
-            };
+    /// Runs one established connection to completion: the application-level handshake, relay
+    /// route registration, and the receive loop, in that order. Returns once the connection drops
+    /// or a step fails; `routes` is updated in place to reflect whatever ended up registered.
+    async fn run_connection(
+        &mut self,
+        conn: Connection,
+        remote_addr: &str,
+        routes: &mut Vec<IpAddr>,
+    ) {
+        info!(peer = %self.config.name, remote_addr, "Connected, starting the communication loop");
+        let peer_config = peer::PeerConfig {
+            common: self.config.common.clone(),
+            conn,
+            advertise: self.config.advertise.clone(),
+        };
 
-            // Sync the relay to the freshly negotiated set: addresses the peer dropped since last
-            // time are withdrawn, the rest are re-armed in place without touching their routes.
-            if let Err(err) = self
-                .relay
-                .reconcile(&changed.0, &routes, connected.clone())
-                .await
-            {
+        let (mut connected, changed) = match peer::Peer::new(peer_config).handshake().await {
+            Ok(result) => result,
+            Err(err) => {
                 self.count_error(
-                    "p2p_vpn_peer_session_relay_insert_errors",
-                    "Failures registering a peer's routes in the relay",
-                    &anyhow::Error::new(err),
-                );
-                warn!(peer = %self.config.name, "Failed to register peer routes in the relay");
-                // `reconcile` rolled its batch back, so nothing of ours is left in the relay.
-                routes.clear();
-                continue;
-            }
-            routes = changed.0.clone();
-
-            if let Err(err) = connected.recv_loop(self.tx_packet.clone()).await {
-                self.count_error(
-                    "p2p_vpn_peer_session_recv_loop_errors",
-                    "Peer receive loop terminations with an error",
+                    "p2p_vpn_peer_session_handshake_errors",
+                    "Handshake failures in a peer session",
                     &err,
                 );
-                warn!(peer = %self.config.name, error = ?err, "Receive loop ended with an error");
+                warn!(peer = %self.config.name, error = ?err, "Handshake failed");
+                return;
             }
+        };
 
-            // The connection dropped: park its routes (keep them installed, marked offline) and
-            // wait for the link to reconnect.
-            self.park_routes(&routes);
+        // Sync the relay to the freshly negotiated set: addresses the peer dropped since last
+        // time are withdrawn, the rest are re-armed in place without touching their routes.
+        if let Err(err) = self
+            .relay
+            .reconcile(&changed.0, routes, connected.clone())
+            .await
+        {
+            self.count_error(
+                "p2p_vpn_peer_session_relay_insert_errors",
+                "Failures registering a peer's routes in the relay",
+                &anyhow::Error::new(err),
+            );
+            warn!(peer = %self.config.name, "Failed to register peer routes in the relay");
+            // `reconcile` rolled its batch back, so nothing of ours is left in the relay.
+            routes.clear();
+            return;
         }
+        *routes = changed.0.clone();
+
+        if let Err(err) = connected.recv_loop(self.tx_packet.clone()).await {
+            self.count_error(
+                "p2p_vpn_peer_session_recv_loop_errors",
+                "Peer receive loop terminations with an error",
+                &err,
+            );
+            warn!(peer = %self.config.name, error = ?err, "Receive loop ended with an error");
+        }
+
+        // The connection dropped: park its routes (keep them installed, marked offline) and
+        // wait for the link to reconnect.
+        self.park_routes(routes);
     }
 
     /// Fully withdraws the peer's routes from the relay (kernel route included). Used only when

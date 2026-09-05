@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use ipnet::IpNet;
 use iroh::endpoint::Connection;
-use iroh::PublicKey;
+use iroh::{PublicKey, TransportAddr, Watcher};
 use metrics::*;
 use secure_p2p_transport::wait_for_direct;
 use std::fmt::Write;
@@ -50,6 +50,20 @@ pub struct PeerConfig {
     pub common: Arc<CommonPeerConfig>,
     pub conn: Connection,
     pub advertise: proto::v1::Advertise,
+}
+
+/// Returns the remote address of `conn`'s currently selected network path, falling back to the
+/// first known path if none is selected yet (e.g. right after the QUIC handshake, before path
+/// selection converges). Used only for connect/disconnect logging.
+pub fn remote_addr(conn: &Connection) -> Option<TransportAddr> {
+    let watcher = conn.paths();
+    let paths = watcher.peek();
+    let addr = paths
+        .iter()
+        .find(|p| p.is_selected())
+        .or_else(|| paths.iter().next())
+        .map(|p| p.remote_addr().clone());
+    addr
 }
 
 #[derive(Clone, Debug)]
