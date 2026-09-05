@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use backoff::backoff::Backoff;
 use metrics::*;
 use std::net::IpAddr;
 use tokio::sync::mpsc;
@@ -63,39 +62,20 @@ impl Tun {
     }
 
     /// Assigns an IP address to the local TUN interface.
+    ///
+    /// On Windows, a newly created TUN adapter isn't immediately known to the IP Helper API for
+    /// every address family, so this is retried with backoff via
+    /// [`osal::retry_on_windows_not_found`]; other platforms never produce that error, so the
+    /// retry loop exits on the first attempt there.
     pub async fn add_if_addr(&self, ip: IpAddr) -> Result<()> {
-        // On Windows, a newly created TUN adapter isn't immediately known to the IP
-        // Helper API for every address family: CreateUnicastIpAddressEntry can fail
-        // with ERROR_NOT_FOUND (os error 1168) for a short window right after the
-        // interface is created, until it finishes registering. Retry with backoff
-        // before giving up; other platforms never produce this error, so the loop
-        // exits on the first attempt there.
-        const ERROR_NOT_FOUND: i32 = 1168;
-        let mut backoff = backoff::ExponentialBackoff {
-            initial_interval: std::time::Duration::from_millis(50),
-            max_interval: std::time::Duration::from_millis(500),
-            max_elapsed_time: Some(std::time::Duration::from_secs(2)),
-            ..Default::default()
-        };
-
-        let result = loop {
-            let result = match ip {
+        osal::retry_on_windows_not_found(|| async {
+            match ip {
                 IpAddr::V4(a) => self.device.add_address_v4(a, 32),
                 IpAddr::V6(a) => self.device.add_address_v6(a, 128),
-            };
-            match &result {
-                Ok(()) => break result,
-                Err(err) if err.raw_os_error() == Some(ERROR_NOT_FOUND) => {
-                    let Some(delay) = backoff.next_backoff() else {
-                        break result;
-                    };
-                    tracing::debug!(?delay, %ip, "interface not yet ready, retrying");
-                    tokio::time::sleep(delay).await;
-                }
-                Err(_) => break result,
             }
-        };
-        result.context(format!(
+        })
+        .await
+        .context(format!(
             "when setting network address '{}' on TUN device '{}'",
             ip, self.if_name
         ))

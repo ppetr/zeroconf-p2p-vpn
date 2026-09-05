@@ -2,6 +2,8 @@ use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
 use tracing::{info_span, Instrument};
 
+use crate::osal;
+
 pub mod ecn;
 
 pub trait RoutingTable: Clone + Send + Sync + std::fmt::Debug + 'static {
@@ -23,23 +25,32 @@ pub struct NetRouteHandle {
 
 impl RoutingTable for NetRouteHandle {
     /// Register a route to the stored interface in the system routing table.
+    ///
+    /// On Windows, `CreateIpForwardEntry2` can fail with the same transient `ERROR_NOT_FOUND` as
+    /// [`crate::tun::Tun::add_if_addr`] for a short window right after the TUN adapter is
+    /// created, so this is retried the same way via [`osal::retry_on_windows_not_found`].
     async fn insert(&self, dest_ip: IpAddr) -> Result<(), std::io::Error> {
         let span = info_span!("p2p_vpn_route_add", %dest_ip, self.if_index);
 
         let route = self.route_entry(dest_ip);
-        self.handle.add(&route).instrument(span).await?;
+        osal::retry_on_windows_not_found(|| self.handle.add(&route))
+            .instrument(span)
+            .await?;
         let ip = if dest_ip.is_ipv6() { "v6" } else { "v4" };
         metrics::counter!("p2p_vpn_route_add_total", "ip" => ip).increment(1);
         metrics::gauge!("p2p_vpn_route_active", "ip" => ip).increment(1);
         Ok(())
     }
 
-    /// Unregister a route to the stored interface in the system routing table.
+    /// Unregister a route to the stored interface in the system routing table. See [`Self::insert`]
+    /// about the retry.
     async fn remove(&self, dest_ip: IpAddr) -> Result<(), std::io::Error> {
         let span = info_span!("p2p_vpn_route_del", %dest_ip, self.if_index);
 
         let route = self.route_entry(dest_ip);
-        self.handle.delete(&route).instrument(span).await?;
+        osal::retry_on_windows_not_found(|| self.handle.delete(&route))
+            .instrument(span)
+            .await?;
         let ip = if dest_ip.is_ipv6() { "v6" } else { "v4" };
         metrics::gauge!("p2p_vpn_route_active", "ip" => ip).decrement(1);
         Ok(())
