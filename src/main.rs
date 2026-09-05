@@ -57,9 +57,18 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    // Respect the https://no-color.org/ convention: tracing_subscriber only disables ANSI
+    // output when it doesn't detect a terminal, which doesn't help on a Windows console that
+    // doesn't support VT100 escape sequences.
+    let ansi = env::var_os("NO_COLOR").is_none();
     tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_span_events(FmtSpan::ENTER | FmtSpan::CLOSE)
+        .with_ansi(ansi)
+        // Just CLOSE, not ENTER: tracing_subscriber emits an ENTER event every time an
+        // instrumented future is polled, not just once when the span is created, so a
+        // long-lived span (e.g. a peer connection, instrumented for its whole lifetime) would
+        // log once per poll -- in practice, once per packet.
+        .with_span_events(FmtSpan::CLOSE)
         .init();
     info!(
         "Logging level is {:?}; change the RUST_LOG environment variable to set a different level",
