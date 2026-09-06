@@ -13,6 +13,7 @@ mod buffer_pool;
 mod config;
 mod connection;
 mod error;
+mod generate;
 mod osal;
 mod peer;
 mod proto;
@@ -48,10 +49,15 @@ async fn main() -> Result<(), anyhow::Error> {
     let argv: Vec<&str> = args.iter().map(String::as_str).collect();
     let config_path = match argv.as_slice() {
         [_argv0, "show", config_path] => return show::run(config_path),
+        [_argv0, "generate", config_path] => return generate::run(config_path),
         [_argv0, config_path] => *config_path,
         _ => {
             let prog = argv.first().copied().unwrap_or("zeroconf-p2p-vpn");
-            panic!("Usage: {prog} <config-file-path>\n       {prog} show <config-file-path>");
+            panic!(
+                "Usage: {prog} <config-file-path>\n       \
+                 {prog} show <config-file-path>\n       \
+                 {prog} generate <config-file-path>"
+            );
         }
     };
 
