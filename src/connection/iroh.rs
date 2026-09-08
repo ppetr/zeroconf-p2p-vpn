@@ -55,8 +55,6 @@ impl OutgoingConnector for IrohConnector {
     type Error = ConnectError;
 
     async fn connect(&self) -> Result<IrohConnection, Self::Error> {
-        Ok(IrohConnection {
-            conn: self.local.connect(self.peer, self.alpn.as_ref()).await?,
-        })
+        Ok(IrohConnection { conn: self.local.connect(self.peer, self.alpn.as_ref()).await? })
     }
 }

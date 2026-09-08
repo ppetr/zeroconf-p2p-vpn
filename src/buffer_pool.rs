@@ -19,11 +19,7 @@ impl BufferPool {
             tx.try_send(vec![0u8; buf_size].into_boxed_slice())
                 .expect("when filling up BufferPool");
         }
-        BufferPool {
-            pool: rx,
-            reclaim: tx,
-            capacity_gauge,
-        }
+        BufferPool { pool: rx, reclaim: tx, capacity_gauge }
     }
 
     /// Gets an empty buffer from the pool. If no buffer is available, blocks until one is
@@ -225,14 +221,10 @@ mod tests {
 
         let buf = pool.pop().await;
         // The only buffer is checked out, so a further pop cannot make progress.
-        assert!(tokio::time::timeout(Duration::from_millis(50), pool.pop())
-            .await
-            .is_err());
+        assert!(tokio::time::timeout(Duration::from_millis(50), pool.pop()).await.is_err());
 
         drop(buf); // returns the buffer to the pool
-        assert!(tokio::time::timeout(Duration::from_millis(50), pool.pop())
-            .await
-            .is_ok());
+        assert!(tokio::time::timeout(Duration::from_millis(50), pool.pop()).await.is_ok());
     }
 
     #[tokio::test]
@@ -308,13 +300,9 @@ mod tests {
         let mut pool = pool(1, 8);
 
         let slice: PooledSlice = pool.pop().await.into();
-        assert!(tokio::time::timeout(Duration::from_millis(50), pool.pop())
-            .await
-            .is_err());
+        assert!(tokio::time::timeout(Duration::from_millis(50), pool.pop()).await.is_err());
 
         drop(slice);
-        assert!(tokio::time::timeout(Duration::from_millis(50), pool.pop())
-            .await
-            .is_ok());
+        assert!(tokio::time::timeout(Duration::from_millis(50), pool.pop()).await.is_ok());
     }
 }

@@ -30,10 +30,7 @@ fn icmp_reply(
     icmp_type: tun::IcmpType,
 ) -> Option<tun::TxPacket> {
     let mut buf = bytes::BytesMut::with_capacity(128);
-    gateway
-        .generate_reply(&mut buf, packet, icmp_type)
-        .ok()
-        .map(|_| tun::TxPacket::new(buf.into()))
+    gateway.generate_reply(&mut buf, packet, icmp_type).ok().map(|_| tun::TxPacket::new(buf.into()))
 }
 
 fn get_metrics_addr() -> std::net::SocketAddr {
@@ -102,10 +99,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let alpn = Arc::new(b"zeroconf-p2p-vpn/vpn/1.0".to_vec());
     // Retry outgoing connects forever (the default caps total elapsed time).
-    let backoff = backoff::ExponentialBackoff {
-        max_elapsed_time: None,
-        ..Default::default()
-    };
+    let backoff = backoff::ExponentialBackoff { max_elapsed_time: None, ..Default::default() };
 
     let node = TransportNode::new(secret_key.clone(), alpn.to_vec(), &config.discovery).await?;
     let endpoint = node.endpoint();
@@ -113,11 +107,8 @@ async fn main() -> Result<(), anyhow::Error> {
     let (rx_uring, mut rx_handle) = mpsc::channel::<tun::RxPacket>(64);
     let (tx_handle, tx_uring) = mpsc::channel::<tun::TxPacket>(64);
     let tun_loop = async {
-        let opts = tun::TunControlOpts {
-            buffer_pool: 512,
-            tx_packet: tx_uring,
-            rx_packet: rx_uring,
-        };
+        let opts =
+            tun::TunControlOpts { buffer_pool: 512, tx_packet: tx_uring, rx_packet: rx_uring };
         tun.control(opts).await
     };
 
@@ -180,10 +171,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 peer = tracing::field::Empty,
                 "Processing packet received from TUN"
             );
-            let dest_ip = tun::inet_slice(&packet.data)
-                .ok()
-                .as_ref()
-                .and_then(tun::destination_ip);
+            let dest_ip = tun::inet_slice(&packet.data).ok().as_ref().and_then(tun::destination_ip);
             if let Some(dest_ip) = &dest_ip {
                 tracing::record_all!(span, dest_ip = ?dest_ip);
             }

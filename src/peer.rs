@@ -80,10 +80,7 @@ impl Peer {
 
     pub fn new(config: PeerConfig) -> Self {
         let max_send_buffer_space = config.conn.datagram_send_buffer_space() as f32;
-        Peer {
-            config,
-            max_send_buffer_space,
-        }
+        Peer { config, max_send_buffer_space }
     }
 
     pub fn public_key(&self) -> PublicKey {
@@ -140,10 +137,7 @@ impl Peer {
             }
         }
 
-        let result = self
-            .config
-            .conn
-            .send_datagram(Bytes::from_owner(PooledSlice::from(packet)));
+        let result = self.config.conn.send_datagram(Bytes::from_owner(PooledSlice::from(packet)));
         // TODO: Record the Result in the metric.
         histogram!(description: "Total time processing a packet TUN->QUIC (ms)",
                    unit: metrics::Unit::Milliseconds,
@@ -162,9 +156,8 @@ impl Peer {
             send?;
             receive
         };
-        let handshake = timeout(self.config.common.handshake_timeout, handshake)
-            .await
-            .context(format!(
+        let handshake =
+            timeout(self.config.common.handshake_timeout, handshake).await.context(format!(
                 "Failed to finish handshake within the deadline {:?}",
                 self.config.common.handshake_timeout
             ))??;
@@ -173,10 +166,7 @@ impl Peer {
             None => anyhow::bail!("Handshake returned no routes"),
         };
         // TODO: Track also unsuccessful handshakes.
-        tracing::info!(
-            peer = self.public_key().to_z32(),
-            "Handshake successfully completed"
-        );
+        tracing::info!(peer = self.public_key().to_z32(), "Handshake successfully completed");
         counter!(description: "Successful handshakes", "p2p_vpn_peer_handshakes").increment(1);
         Ok((ConnectedPeer { peer: self }, routes))
     }
@@ -190,13 +180,8 @@ impl Peer {
             "Sending Command::Advertise {:?}",
             cmd
         );
-        let control = ControlRequest {
-            command: Some(cmd),
-            ..Default::default()
-        };
-        Ok(proto::control_to_status(
-            proto::write_control(&self.config.conn, &control).await?,
-        )?)
+        let control = ControlRequest { command: Some(cmd), ..Default::default() };
+        Ok(proto::control_to_status(proto::write_control(&self.config.conn, &control).await?)?)
     }
 
     /// Waits for a single control message and processes it.
@@ -211,10 +196,9 @@ impl Peer {
         counter!(description: "Received v1::ControlRequest messages",
                  "p2p_vpn_peer_recv_control_message")
         .increment(1);
-        let routes = proto::read_control(&self.config.conn, async |r| {
-            self.handle_control_request(&r).await
-        })
-        .await?;
+        let routes =
+            proto::read_control(&self.config.conn, async |r| self.handle_control_request(&r).await)
+                .await?;
         Ok(routes)
     }
 
@@ -371,9 +355,7 @@ mod tests {
 
         // Close A's side instead of running its handshake, simulating a peer that disconnects
         // mid-handshake. B's `handshake()` must fail promptly, not hang until its own timeout.
-        node_a
-            .conn
-            .close(VarInt::from_u32(0), b"simulated disconnect");
+        node_a.conn.close(VarInt::from_u32(0), b"simulated disconnect");
 
         let started = std::time::Instant::now();
         let result = peer_b.handshake().await;
@@ -401,11 +383,7 @@ mod tests {
 
         let subnet = IpNet::V6(addr::vpn_subnet(0));
         let advertise_b = test_util::advertise_for(&node_b.secret_key, &subnet);
-        let peer_b = Peer::new(test_util::peer_config(
-            &node_b,
-            Arc::new(common),
-            advertise_b,
-        ));
+        let peer_b = Peer::new(test_util::peer_config(&node_b, Arc::new(common), advertise_b));
 
         // A never runs its own handshake (never sends an `Advertise` or responds to B's), but
         // its connection stays open — unlike `handshake_fails_if_connection_closes_mid_handshake`,
@@ -454,10 +432,7 @@ mod tests {
         let icmp_reply = connected_a
             .send_packet(packet)
             .expect("send_packet should succeed for a packet under the connection's MTU");
-        assert!(
-            icmp_reply.is_none(),
-            "a packet under the MTU shouldn't trigger an ICMP reply"
-        );
+        assert!(icmp_reply.is_none(), "a packet under the MTU shouldn't trigger an ICMP reply");
 
         let received = timeout(Duration::from_secs(5), rx.recv())
             .await
@@ -488,10 +463,8 @@ mod tests {
         // Simulate A re-advertising after the initial handshake (e.g. following a config
         // change): send a second `Advertise` on a fresh stream, independent of the one used
         // during the handshake, and confirm `recv_control_loop` picks it up.
-        let (send_result, recv_result) = tokio::join!(
-            connected_a.peer.send_advertise(),
-            connected_b.recv_control_loop(),
-        );
+        let (send_result, recv_result) =
+            tokio::join!(connected_a.peer.send_advertise(), connected_b.recv_control_loop(),);
         send_result.expect("A's second advertise should send successfully");
         let routes = recv_result.expect("B's recv_control_loop should return the updated routes");
         assert_eq!(routes.0.len(), 1);

@@ -26,10 +26,7 @@ const MAX_MESSAGE_SIZE: usize = 2048;
 /// frame. This is what the peer reads back as a `ThinStatus` when its own in-flight request
 /// resolves with a connection-closed error.
 pub fn close_connection(conn: &Connection, status: &ThinStatus) {
-    conn.close(
-        VarInt::from_u32(i32::from(status.code_raw()) as u32),
-        status.message().as_bytes(),
-    );
+    conn.close(VarInt::from_u32(i32::from(status.code_raw()) as u32), status.message().as_bytes());
 }
 
 fn status_to_control(status: ThinStatus) -> v1::ControlResponse {
@@ -44,9 +41,7 @@ fn status_to_control(status: ThinStatus) -> v1::ControlResponse {
 pub fn control_to_status(response: v1::ControlResponse) -> Result<(), ThinStatus> {
     match response.status {
         Some(v1::Status { code, message }) if let Some(code) = NonZeroI32::new(code) => {
-            Err(ThinStatus::builder(code)
-                .message(message.as_deref().unwrap_or(""))
-                .build())
+            Err(ThinStatus::builder(code).message(message.as_deref().unwrap_or("")).build())
         }
         _ => Ok(()),
     }
@@ -58,10 +53,7 @@ pub async fn read_control<F, R>(conn: &Connection, f: F) -> Result<R, ThinStatus
 where
     F: AsyncFnOnce(v1::ControlRequest) -> Result<R, ThinStatus>,
 {
-    let (send, mut recv) = conn
-        .accept_bi()
-        .await
-        .map_err(|e| e.error_code(FailedPrecondition))?;
+    let (send, mut recv) = conn.accept_bi().await.map_err(|e| e.error_code(FailedPrecondition))?;
     let request = match read_control_stream(&mut recv).await {
         Err(e) => {
             let e = e.context("Received a malformed message from the peer");
@@ -78,9 +70,7 @@ where
         Ok(_) => Default::default(),
         Err(status) => status_to_control(status.clone()),
     };
-    write_control_stream(send, &control_response)
-        .await
-        .map_err(|e| e.error_code(Aborted))?;
+    write_control_stream(send, &control_response).await.map_err(|e| e.error_code(Aborted))?;
     response
 }
 
@@ -149,19 +139,13 @@ mod tests {
 
     fn status(code: i32, message: Option<&str>) -> v1::ControlResponse {
         v1::ControlResponse {
-            status: Some(v1::Status {
-                code,
-                message: message.map(str::to_string),
-            }),
+            status: Some(v1::Status { code, message: message.map(str::to_string) }),
         }
     }
 
     #[test]
     fn control_to_status_is_ok_when_no_status_is_present() {
-        assert_eq!(
-            control_to_status(v1::ControlResponse { status: None }),
-            Ok(())
-        );
+        assert_eq!(control_to_status(v1::ControlResponse { status: None }), Ok(()));
     }
 
     #[test]
@@ -205,9 +189,7 @@ mod tests {
     #[test]
     fn status_to_control_serializes_code_and_message() {
         let response = status_to_control(
-            ThinStatus::builder(ErrorCode::InvalidArgument)
-                .message("nope")
-                .build(),
+            ThinStatus::builder(ErrorCode::InvalidArgument).message("nope").build(),
         );
         let status = response.status.expect("status should be populated");
         assert_eq!(status.code, ErrorCode::InvalidArgument as i32);
@@ -224,9 +206,7 @@ mod tests {
 
     #[test]
     fn status_survives_a_control_round_trip() {
-        let original = ThinStatus::builder(ErrorCode::DataLoss)
-            .message("half gone")
-            .build();
+        let original = ThinStatus::builder(ErrorCode::DataLoss).message("half gone").build();
         let restored = control_to_status(status_to_control(original.clone())).unwrap_err();
         assert_eq!(restored.code(), Some(ErrorCode::DataLoss));
         assert_eq!(restored.message(), "half gone");

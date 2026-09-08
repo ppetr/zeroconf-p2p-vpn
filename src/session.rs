@@ -50,12 +50,7 @@ impl PeerSession {
         relay: Arc<Relay<ConnectedPeer>>,
         tx_packet: mpsc::Sender<tun::TxPacket>,
     ) -> Self {
-        PeerSession {
-            config,
-            link,
-            relay,
-            tx_packet,
-        }
+        PeerSession { config, link, relay, tx_packet }
     }
 
     /// Runs until the underlying `PeerLink` task ends; on every other error it logs, counts, and
@@ -92,9 +87,7 @@ impl PeerSession {
             // events tracing_subscriber emits for it (see `main.rs`) double as connect/disconnect
             // log lines for free, without a matching explicit log call at the other end.
             let span = info_span!("peer_connection", peer = %self.config.name, %remote_addr);
-            self.run_connection(conn, &remote_addr, &mut routes)
-                .instrument(span)
-                .await;
+            self.run_connection(conn, &remote_addr, &mut routes).instrument(span).await;
         }
     }
 
@@ -129,11 +122,7 @@ impl PeerSession {
 
         // Sync the relay to the freshly negotiated set: addresses the peer dropped since last
         // time are withdrawn, the rest are re-armed in place without touching their routes.
-        if let Err(err) = self
-            .relay
-            .reconcile(&changed.0, routes, connected.clone())
-            .await
-        {
+        if let Err(err) = self.relay.reconcile(&changed.0, routes, connected.clone()).await {
             self.count_error(
                 "p2p_vpn_peer_session_relay_insert_errors",
                 "Failures registering a peer's routes in the relay",

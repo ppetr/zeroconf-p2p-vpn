@@ -26,11 +26,7 @@ impl<C: OutgoingConnector> OutgoingConnectLoop<C> {
         watch_rx: watch::Receiver<Option<C::Connection>>,
         tx: mpsc::Sender<C::Connection>,
     ) -> Self {
-        Self {
-            connector,
-            watch_rx,
-            tx,
-        }
+        Self { connector, watch_rx, tx }
     }
 
     pub fn spawn(
@@ -137,12 +133,7 @@ mod tests {
     impl MockBackoff {
         fn new(delays: Vec<Duration>) -> Self {
             let (reset_tx, reset_rx) = watch::channel(0);
-            Self {
-                delays,
-                index: -1,
-                reset_tx,
-                reset_rx,
-            }
+            Self { delays, index: -1, reset_tx, reset_rx }
         }
     }
 
@@ -167,10 +158,7 @@ mod tests {
     impl MockConnector {
         fn new(mut results: Vec<Result<i32, &'static str>>) -> Self {
             results.reverse(); // FIFO order from a vector
-            Self {
-                connect_results: Mutex::new(results),
-                connected: Notify::new(),
-            }
+            Self { connect_results: Mutex::new(results), connected: Notify::new() }
         }
     }
 
@@ -225,9 +213,7 @@ mod tests {
             watch_tx.send(None).unwrap();
             let _ = watch_rx.changed().await.unwrap();
             assert!(
-                timeout(Duration::from_millis(100), reset_rx.changed())
-                    .await
-                    .is_ok(),
+                timeout(Duration::from_millis(100), reset_rx.changed()).await.is_ok(),
                 "Reset should be called after resetting the connection to None"
             );
 
@@ -304,9 +290,7 @@ mod tests {
             reset_rx.mark_unchanged();
             watch_tx.send(None).unwrap();
             assert!(
-                timeout(Duration::from_millis(100), reset_rx.changed())
-                    .await
-                    .is_ok(),
+                timeout(Duration::from_millis(100), reset_rx.changed()).await.is_ok(),
                 "Reset should be called when select! was interrupted by the explicit None signal"
             );
 

@@ -29,10 +29,7 @@ pub struct TxPacket {
 
 impl TxPacket {
     pub fn new(data: Bytes) -> Self {
-        Self {
-            data,
-            populated_at: Instant::now(),
-        }
+        Self { data, populated_at: Instant::now() }
     }
 }
 
@@ -57,10 +54,7 @@ pub struct RxPacket {
 
 impl RxPacket {
     pub fn new(data: PooledSlice) -> Self {
-        Self {
-            data,
-            populated_at: Instant::now(),
-        }
+        Self { data, populated_at: Instant::now() }
     }
 }
 
@@ -82,11 +76,7 @@ impl std::fmt::Debug for RxPacket {
 pub fn inet_slice<'a>(slice: &'a (impl AsRef<[u8]> + ?Sized)) -> Result<InternetSlice<'a>> {
     SlicedPacket::from_ip(slice.as_ref())
         .context("parsing packet IP addresses")
-        .and_then(|sliced| {
-            sliced
-                .net
-                .ok_or(anyhow!("no network information in packet"))
-        })
+        .and_then(|sliced| sliced.net.ok_or(anyhow!("no network information in packet")))
 }
 
 /// Extracts the destination IP address from a slice.
@@ -322,9 +312,7 @@ mod tests {
     fn empty_packet_is_rejected() {
         let gateway = IcmpGateway::from_addr(IpAddr::from_str("8.8.4.4").unwrap());
         let mut buf = BytesMut::with_capacity(64);
-        let err = gateway
-            .generate_reply(&mut buf, b"", IcmpType::unreachable_net())
-            .unwrap_err();
+        let err = gateway.generate_reply(&mut buf, b"", IcmpType::unreachable_net()).unwrap_err();
         assert!(err.to_string().contains("Empty packet"));
     }
 
@@ -333,11 +321,7 @@ mod tests {
         let gateway = IcmpGateway::from_addr(IpAddr::from_str("8.8.4.4").unwrap());
         let mut buf = BytesMut::with_capacity(64);
         assert!(gateway
-            .generate_reply(
-                &mut buf,
-                &[0xde, 0xad, 0xbe, 0xef],
-                IcmpType::unreachable_net()
-            )
+            .generate_reply(&mut buf, &[0xde, 0xad, 0xbe, 0xef], IcmpType::unreachable_net())
             .is_err());
     }
 
@@ -380,9 +364,8 @@ mod tests {
 
         let gateway = IcmpGateway::from_addr(IpAddr::from_str("8.8.4.4").unwrap());
         let mut reply = BytesMut::with_capacity(256);
-        let to_addr = gateway
-            .generate_reply(&mut reply, &input, IcmpType::unreachable_net())
-            .unwrap();
+        let to_addr =
+            gateway.generate_reply(&mut reply, &input, IcmpType::unreachable_net()).unwrap();
 
         // 20B IPv4 header + 8B ICMPv4 header + exactly 64 echoed bytes.
         assert_eq!(reply.len(), 20 + 8 + 64);
@@ -392,33 +375,21 @@ mod tests {
 
     #[test]
     fn inet_slice_identifies_ipv4_ipv6_and_rejects_garbage() {
-        assert!(matches!(
-            inet_slice(&MOCK_IPV4_PACKET).unwrap(),
-            InternetSlice::Ipv4(_)
-        ));
-        assert!(matches!(
-            inet_slice(&MOCK_IPV6_PACKET).unwrap(),
-            InternetSlice::Ipv6(_)
-        ));
+        assert!(matches!(inet_slice(&MOCK_IPV4_PACKET).unwrap(), InternetSlice::Ipv4(_)));
+        assert!(matches!(inet_slice(&MOCK_IPV6_PACKET).unwrap(), InternetSlice::Ipv6(_)));
         assert!(inet_slice(&[0xde, 0xad, 0xbe, 0xef]).is_err());
     }
 
     #[test]
     fn destination_ip_reads_the_ipv4_destination() {
         let slice = inet_slice(&MOCK_IPV4_PACKET).unwrap();
-        assert_eq!(
-            destination_ip(&slice),
-            Some(IpAddr::from_str("8.8.8.8").unwrap())
-        );
+        assert_eq!(destination_ip(&slice), Some(IpAddr::from_str("8.8.8.8").unwrap()));
     }
 
     #[test]
     fn destination_ip_reads_the_ipv6_destination() {
         let slice = inet_slice(&MOCK_IPV6_PACKET).unwrap();
-        assert_eq!(
-            destination_ip(&slice),
-            Some(IpAddr::from_str("2001:db8::fe2").unwrap())
-        );
+        assert_eq!(destination_ip(&slice), Some(IpAddr::from_str("2001:db8::fe2").unwrap()));
     }
 
     #[test]
@@ -439,10 +410,7 @@ mod tests {
         assert_eq!(v4.own_ipv6, None);
 
         let v6 = IcmpGateway::from_addr(IpAddr::from_str("2001:db8::5").unwrap());
-        assert_eq!(
-            v6.own_ipv6,
-            Some(Ipv6Addr::from_str("2001:db8::5").unwrap())
-        );
+        assert_eq!(v6.own_ipv6, Some(Ipv6Addr::from_str("2001:db8::5").unwrap()));
         assert_eq!(v6.own_ipv4, None);
     }
 

@@ -11,10 +11,7 @@ impl ExtractedErrorCode {
     /// Extracts `ErrorKind` from `error` and also converts it into `ErrorCode`.
     pub fn from_io(error: &std::io::Error) -> Self {
         let kind = error.kind();
-        Self {
-            code: ErrorCode::from_error_kind(kind),
-            kind,
-        }
+        Self { code: ErrorCode::from_error_kind(kind), kind }
     }
 
     /// Extracts `std::io::Error` and `ThinStatus` from `error`. If there is no `ThinStatus` in
@@ -24,10 +21,7 @@ impl ExtractedErrorCode {
         let kind = error.downcast_ref::<std::io::Error>().map(|e| e.kind());
         let code = error.downcast_ref::<ThinStatus>().and_then(|t| t.code());
         let code = code.or_else(|| kind.map(ErrorCode::from_error_kind));
-        Self {
-            code: code.unwrap_or(ErrorCode::Unknown),
-            kind: kind.unwrap_or(ErrorKind::Other),
-        }
+        Self { code: code.unwrap_or(ErrorCode::Unknown), kind: kind.unwrap_or(ErrorKind::Other) }
     }
 }
 
@@ -198,20 +192,12 @@ mod tests {
 
     #[test]
     fn extracted_error_code_becomes_two_ordered_labels() {
-        let extracted = ExtractedErrorCode {
-            code: ErrorCode::DeadlineExceeded,
-            kind: ErrorKind::TimedOut,
-        };
+        let extracted =
+            ExtractedErrorCode { code: ErrorCode::DeadlineExceeded, kind: ErrorKind::TimedOut };
         let labels: Vec<metrics::Label> = (&extracted).into();
         assert_eq!(labels.len(), 2);
-        assert_eq!(
-            (labels[0].key(), labels[0].value()),
-            ("ERROR_CODE", "DEADLINE_EXCEEDED")
-        );
-        assert_eq!(
-            (labels[1].key(), labels[1].value()),
-            ("ERROR_KIND", "TimedOut")
-        );
+        assert_eq!((labels[0].key(), labels[0].value()), ("ERROR_CODE", "DEADLINE_EXCEEDED"));
+        assert_eq!((labels[1].key(), labels[1].value()), ("ERROR_KIND", "TimedOut"));
 
         // The owned conversion and `into_labels()` agree with the borrowed one.
         let owned: Vec<metrics::Label> = extracted.into_labels();
@@ -221,10 +207,7 @@ mod tests {
     #[test]
     fn error_kind_str_covers_named_kinds_and_falls_back_to_other() {
         assert_eq!(error_kind_str(ErrorKind::NotFound), "NotFound");
-        assert_eq!(
-            error_kind_str(ErrorKind::ConnectionReset),
-            "ConnectionReset"
-        );
+        assert_eq!(error_kind_str(ErrorKind::ConnectionReset), "ConnectionReset");
         assert_eq!(error_kind_str(ErrorKind::WouldBlock), "WouldBlock");
         assert_eq!(error_kind_str(ErrorKind::UnexpectedEof), "UnexpectedEof");
         assert_eq!(error_kind_str(ErrorKind::Other), "Other");
@@ -233,10 +216,7 @@ mod tests {
     #[test]
     fn mask_cancelled_swallows_only_the_cancelled_code() {
         assert_eq!(mask_cancelled(Ok(())), Ok(()));
-        assert_eq!(
-            mask_cancelled(Err(ThinStatus::builder(ErrorCode::Cancelled).build())),
-            Ok(())
-        );
+        assert_eq!(mask_cancelled(Err(ThinStatus::builder(ErrorCode::Cancelled).build())), Ok(()));
         let internal = ThinStatus::builder(ErrorCode::Internal).build();
         assert_eq!(mask_cancelled(Err(internal.clone())), Err(internal));
     }
@@ -249,10 +229,7 @@ mod tests {
         let failed = tokio::spawn(async {
             Err::<(), ThinStatus>(ThinStatus::builder(ErrorCode::NotFound).build())
         });
-        assert_eq!(
-            unwrap_join_handle(failed.await).unwrap_err().code(),
-            Some(ErrorCode::NotFound)
-        );
+        assert_eq!(unwrap_join_handle(failed.await).unwrap_err().code(), Some(ErrorCode::NotFound));
     }
 
     #[tokio::test]

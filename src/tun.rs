@@ -29,22 +29,13 @@ impl Tun {
     /// (Windows only; ignored elsewhere).
     pub async fn new(if_name: Option<&str>, description: &str) -> Result<Tun> {
         let builder = DeviceBuilder::new();
-        let builder = if let Some(name) = if_name {
-            builder.name(name)
-        } else {
-            builder
-        };
+        let builder = if let Some(name) = if_name { builder.name(name) } else { builder };
         let builder = Self::with_description(builder, description);
-        let dev = builder
-            .build_async()
-            .context("Failed to convert TUN device into async device")?;
+        let dev =
+            builder.build_async().context("Failed to convert TUN device into async device")?;
         let name = dev.name()?;
         let if_index = dev.if_index().context("failed to get the device index")?;
-        Ok(Tun {
-            device: dev,
-            if_name: name,
-            if_index,
-        })
+        Ok(Tun { device: dev, if_name: name, if_index })
     }
 
     #[cfg(windows)]
@@ -75,10 +66,7 @@ impl Tun {
             }
         })
         .await
-        .context(format!(
-            "when setting network address '{}' on TUN device '{}'",
-            ip, self.if_name
-        ))
+        .context(format!("when setting network address '{}' on TUN device '{}'", ip, self.if_name))
     }
 
     pub async fn control(&self, opts: TunControlOpts) -> Result<()> {

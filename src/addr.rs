@@ -65,10 +65,8 @@ pub fn verify_signed_ipnet(
     if net.addr() == gen_addr {
         Ok(())
     } else {
-        let msg = format!(
-            "Address {} doesn't match the generated signature address {}",
-            net, gen_addr
-        );
+        let msg =
+            format!("Address {} doesn't match the generated signature address {}", net, gen_addr);
         Err(Error::new(ErrorKind::PermissionDenied, msg).into())
     }
 }
@@ -121,20 +119,14 @@ mod tests {
 
     #[test]
     fn test_vpn_subnet_zero_matches_default_subnet0() {
-        assert_eq!(
-            vpn_subnet(0),
-            Ipv6Net::new_assert(VPN_IPV6_PREFIX.addr(), 64)
-        );
+        assert_eq!(vpn_subnet(0), Ipv6Net::new_assert(VPN_IPV6_PREFIX.addr(), 64));
     }
 
     #[test]
     fn test_vpn_subnet_sets_the_subnet_id_bits() {
         let net = vpn_subnet(0x1234);
         assert_eq!(net.prefix_len(), 64);
-        assert_eq!(
-            net.addr(),
-            Ipv6Addr::new(0xfdbd, 0xa6ce, 0x654d, 0x1234, 0, 0, 0, 0)
-        );
+        assert_eq!(net.addr(), Ipv6Addr::new(0xfdbd, 0xa6ce, 0x654d, 0x1234, 0, 0, 0, 0));
     }
 
     #[test]
@@ -178,10 +170,7 @@ mod tests {
 
         // Bob tries to verify Alice's IP using Charlie's public key
         let result = verify_signed_ipnet(alice_net, &charlie_key.public(), &signature);
-        assert!(
-            result.is_err(),
-            "Verification must fail when using a different public key"
-        );
+        assert!(result.is_err(), "Verification must fail when using a different public key");
     }
 
     #[test]
@@ -195,11 +184,9 @@ mod tests {
         };
 
         // Alice tries to claim she got a different IP within the same subnet
-        let spoofed_net = IpNet::new(
-            IpAddr::V4(Ipv4Addr::from_bits(real_ip.to_bits() ^ 1u32)),
-            net.prefix_len(),
-        )
-        .unwrap();
+        let spoofed_net =
+            IpNet::new(IpAddr::V4(Ipv4Addr::from_bits(real_ip.to_bits() ^ 1u32)), net.prefix_len())
+                .unwrap();
 
         let result = verify_signed_ipnet(spoofed_net, &secret_key.public(), &signature);
         assert!(
@@ -223,11 +210,7 @@ mod tests {
         // map to a broadcast address, the mitigation kicks in.
         for _ in 0..100 {
             let (ip, _) = generate_signed_ipnet(&net, &secret_key);
-            assert_ne!(
-                ip.addr(),
-                broadcast_ip,
-                "Generated IP must never be the broadcast address"
-            );
+            assert_ne!(ip.addr(), broadcast_ip, "Generated IP must never be the broadcast address");
         }
     }
 }

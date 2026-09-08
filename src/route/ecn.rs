@@ -218,15 +218,9 @@ mod tests {
     fn unparseable_packets_are_dropped() {
         assert_eq!(process_packet_congestion(&mut []), PacketAction::Drop);
         // Garbage: IP version nibble 0xF is neither 4 nor 6.
-        assert_eq!(
-            process_packet_congestion(&mut [0xff, 0xff, 0xff, 0xff]),
-            PacketAction::Drop
-        );
+        assert_eq!(process_packet_congestion(&mut [0xff, 0xff, 0xff, 0xff]), PacketAction::Drop);
         // A truncated IPv4 header (claims IHL 5 but only 3 bytes present).
-        assert_eq!(
-            process_packet_congestion(&mut [0x45, 0x00, 0x00]),
-            PacketAction::Drop
-        );
+        assert_eq!(process_packet_congestion(&mut [0x45, 0x00, 0x00]), PacketAction::Drop);
     }
 
     /// A deterministic RNG whose every output is a fixed value chosen so that

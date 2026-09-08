@@ -33,9 +33,7 @@ impl RoutingTable for NetRouteHandle {
         let span = info_span!("p2p_vpn_route_add", %dest_ip, self.if_index);
 
         let route = self.route_entry(dest_ip);
-        osal::retry_on_windows_not_found(|| self.handle.add(&route))
-            .instrument(span)
-            .await?;
+        osal::retry_on_windows_not_found(|| self.handle.add(&route)).instrument(span).await?;
         let ip = if dest_ip.is_ipv6() { "v6" } else { "v4" };
         metrics::counter!("p2p_vpn_route_add_total", "ip" => ip).increment(1);
         metrics::gauge!("p2p_vpn_route_active", "ip" => ip).increment(1);
@@ -48,9 +46,7 @@ impl RoutingTable for NetRouteHandle {
         let span = info_span!("p2p_vpn_route_del", %dest_ip, self.if_index);
 
         let route = self.route_entry(dest_ip);
-        osal::retry_on_windows_not_found(|| self.handle.delete(&route))
-            .instrument(span)
-            .await?;
+        osal::retry_on_windows_not_found(|| self.handle.delete(&route)).instrument(span).await?;
         let ip = if dest_ip.is_ipv6() { "v6" } else { "v4" };
         metrics::gauge!("p2p_vpn_route_active", "ip" => ip).decrement(1);
         Ok(())
@@ -60,10 +56,7 @@ impl RoutingTable for NetRouteHandle {
 impl NetRouteHandle {
     /// Constructs an instance using a newly created `net_route::Handle` and an interface index.
     pub fn new(if_index: u32) -> Result<Self, std::io::Error> {
-        Ok(Self::from_handle(
-            Arc::new(net_route::Handle::new()?),
-            if_index,
-        ))
+        Ok(Self::from_handle(Arc::new(net_route::Handle::new()?), if_index))
     }
 
     pub fn from_handle(handle: Arc<net_route::Handle>, if_index: u32) -> Self {

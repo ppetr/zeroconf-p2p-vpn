@@ -32,13 +32,7 @@ mod tests {
 
     #[test]
     fn transient_errnos_are_retryable() {
-        for errno in [
-            libc::EAGAIN,
-            libc::EINTR,
-            libc::EINVAL,
-            libc::EMSGSIZE,
-            libc::ENOBUFS,
-        ] {
+        for errno in [libc::EAGAIN, libc::EINTR, libc::EINVAL, libc::EMSGSIZE, libc::ENOBUFS] {
             assert!(
                 is_tun_transient(&Error::from_raw_os_error(errno)),
                 "errno {errno} should be treated as transient"
@@ -58,9 +52,6 @@ mod tests {
 
     #[test]
     fn errors_without_an_os_code_are_not_retryable() {
-        assert!(!is_tun_transient(&Error::new(
-            ErrorKind::Other,
-            "not an OS error"
-        )));
+        assert!(!is_tun_transient(&Error::new(ErrorKind::Other, "not an OS error")));
     }
 }

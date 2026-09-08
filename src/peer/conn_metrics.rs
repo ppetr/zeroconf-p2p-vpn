@@ -112,11 +112,7 @@ impl QuinnMetrics {
                     break;
                 }
                 self.update_connection(&connection.stats());
-                if let Some(path) = connection
-                    .paths()
-                    .into_iter()
-                    .find(|path| path.is_selected())
-                {
+                if let Some(path) = connection.paths().into_iter().find(|path| path.is_selected()) {
                     if let Some(stats) = path.stats() {
                         self.update_path(&stats);
                     } else {
@@ -138,12 +134,9 @@ impl QuinnMetrics {
         self.congestion_events.set(stats.congestion_events as f64);
         self.lost_packets.set(stats.lost_packets as f64);
         self.lost_bytes.set(stats.lost_bytes as f64);
-        self.sent_plpmtud_probes
-            .set(stats.sent_plpmtud_probes as f64);
-        self.lost_plpmtud_probes
-            .set(stats.lost_plpmtud_probes as f64);
-        self.black_holes_detected
-            .set(stats.black_holes_detected as f64);
+        self.sent_plpmtud_probes.set(stats.sent_plpmtud_probes as f64);
+        self.lost_plpmtud_probes.set(stats.lost_plpmtud_probes as f64);
+        self.black_holes_detected.set(stats.black_holes_detected as f64);
         self.current_mtu.set(stats.current_mtu as f64);
     }
 }

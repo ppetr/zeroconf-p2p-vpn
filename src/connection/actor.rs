@@ -67,13 +67,7 @@ impl<C: ManagedConnection> Actor<C> {
         let drop_guard = cancellation.clone().drop_guard();
         let conn_tx = self.connection_queue();
         let handle = tokio::spawn(self.run(cancellation));
-        (
-            ActorHandle {
-                conn_tx,
-                _drop_guard: Arc::new(drop_guard),
-            },
-            handle,
-        )
+        (ActorHandle { conn_tx, _drop_guard: Arc::new(drop_guard) }, handle)
     }
 
     pub async fn run(mut self, cancellation: CancellationToken) -> Result<(), ThinStatus> {
@@ -170,13 +164,7 @@ mod tests {
     impl FakeConnection {
         fn new(id: isize, direction: Direction) -> Self {
             let (closed_tx, closed_rx) = watch::channel(false);
-            Self {
-                id,
-                direction,
-                closed_tx,
-                closed_rx,
-                closed_signal: Arc::new(OnceLock::new()),
-            }
+            Self { id, direction, closed_tx, closed_rx, closed_signal: Arc::new(OnceLock::new()) }
         }
 
         fn was_closed(&self) -> bool {
@@ -212,9 +200,7 @@ mod tests {
         }
 
         fn spawn_closed_watcher(&self, on_close: mpsc::Sender<Self::ConnectionId>) {
-            self.closed_signal
-                .set(on_close)
-                .expect("closed watcher installed twice");
+            self.closed_signal.set(on_close).expect("closed watcher installed twice");
         }
     }
 
@@ -233,11 +219,7 @@ mod tests {
             let actor = Actor::new(local_key, remote_key, watch_tx);
             let (actor, _) = actor.spawn(cancellation.clone());
 
-            TestActor {
-                actor,
-                watch_rx,
-                cancellation,
-            }
+            TestActor { actor, watch_rx, cancellation }
         }
 
         async fn send(&mut self, conn: &FakeConnection) {
@@ -246,9 +228,7 @@ mod tests {
 
         async fn send_and_wait(&mut self, conn: &FakeConnection) -> FakeConnection {
             self.actor.conn_tx.send(conn.clone()).await.unwrap();
-            self.wait_for_connection()
-                .await
-                .expect("connection was not installed")
+            self.wait_for_connection().await.expect("connection was not installed")
         }
 
         fn receiver(&mut self) -> &mut watch::Receiver<Option<FakeConnection>> {
@@ -257,10 +237,7 @@ mod tests {
 
         async fn wait_for_connection(&mut self) -> Option<FakeConnection> {
             timeout(Duration::from_secs(1), async {
-                self.receiver()
-                    .changed()
-                    .await
-                    .expect("Connection queue closed");
+                self.receiver().changed().await.expect("Connection queue closed");
                 self.receiver().borrow_and_update().clone()
             })
             .await
@@ -332,11 +309,8 @@ mod tests {
         .expect("timed out waiting for `incoming` to be closed by `actor`");
 
         assert!(!actor.receiver().has_changed().unwrap());
-        let current = actor
-            .receiver()
-            .borrow_and_update()
-            .clone()
-            .expect("connection was not installed");
+        let current =
+            actor.receiver().borrow_and_update().clone().expect("connection was not installed");
         assert_eq!(current.id, outgoing.id);
 
         actor.cancellation.cancel();
@@ -371,11 +345,8 @@ mod tests {
 
         old.close_from_remote().await;
 
-        let current = actor
-            .receiver()
-            .borrow_and_update()
-            .clone()
-            .expect("connection was not installed");
+        let current =
+            actor.receiver().borrow_and_update().clone().expect("connection was not installed");
 
         assert_eq!(current.id, new.id);
 

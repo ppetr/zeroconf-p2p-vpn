@@ -71,25 +71,15 @@ pub async fn connect_pair() -> (Node, Node) {
     // after this `join!` would deadlock (the client would never receive a response to drive its
     // side of the handshake forward).
     let (conn_a, conn_b) = tokio::join!(ep_a.connect(b_addr, TEST_ALPN), async {
-        let incoming = ep_b
-            .accept()
-            .await
-            .expect("endpoint closed while accepting a test connection");
+        let incoming =
+            ep_b.accept().await.expect("endpoint closed while accepting a test connection");
         incoming.await.expect("incoming test connection failed")
     });
     let conn_a = conn_a.expect("outgoing test connection failed");
 
     (
-        Node {
-            conn: conn_a,
-            secret_key: key_a,
-            endpoint: ep_a,
-        },
-        Node {
-            conn: conn_b,
-            secret_key: key_b,
-            endpoint: ep_b,
-        },
+        Node { conn: conn_a, secret_key: key_a, endpoint: ep_a },
+        Node { conn: conn_b, secret_key: key_b, endpoint: ep_b },
     )
 }
 
@@ -129,11 +119,7 @@ pub fn common_config(icmp_gateway: IcmpGateway) -> Arc<CommonPeerConfig> {
 
 /// Convenience to build a `PeerConfig` from a harness `Node`.
 pub fn peer_config(node: &Node, common: Arc<CommonPeerConfig>, advertise: Advertise) -> PeerConfig {
-    PeerConfig {
-        common,
-        conn: node.conn.clone(),
-        advertise,
-    }
+    PeerConfig { common, conn: node.conn.clone(), advertise }
 }
 
 /// Builds an `RxPacket` wrapping `data`, for tests that push a packet through

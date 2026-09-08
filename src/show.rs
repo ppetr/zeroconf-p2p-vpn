@@ -16,10 +16,8 @@ use crate::config::Config;
 
 /// Renders the report printed by `show`.
 pub fn report(config: &Config, secret_key: &SecretKey) -> String {
-    let (own_net, _sig) = addr::generate_signed_ipnet(
-        &ipnet::IpNet::V6(addr::vpn_subnet(config.subnet)),
-        secret_key,
-    );
+    let (own_net, _sig) =
+        addr::generate_signed_ipnet(&ipnet::IpNet::V6(addr::vpn_subnet(config.subnet)), secret_key);
 
     let mut out = String::new();
     let _ = writeln!(out, "public key:  {}", secret_key.public().to_z32());

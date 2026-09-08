@@ -149,15 +149,8 @@ mod tests {
 
         generate(&config_path).expect("generate should succeed");
 
-        let mode = std::fs::metadata(dir.join(DEFAULT_KEY_FILE_NAME))
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(
-            mode & 0o777,
-            0o600,
-            "private key must not be group/world readable"
-        );
+        let mode = std::fs::metadata(dir.join(DEFAULT_KEY_FILE_NAME)).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "private key must not be group/world readable");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -172,11 +165,7 @@ mod tests {
 
         let second = generate(&config_path).expect("second run should succeed");
 
-        assert_eq!(
-            first.to_bytes(),
-            second.to_bytes(),
-            "a second run must keep the existing key"
-        );
+        assert_eq!(first.to_bytes(), second.to_bytes(), "a second run must keep the existing key");
         assert_eq!(
             config_bytes,
             std::fs::read(&config_path).unwrap(),
@@ -195,10 +184,7 @@ mod tests {
         let key = generate(&config_path).expect("generate should succeed");
 
         let key_path = dir.join("host.key");
-        assert!(
-            key_path.exists(),
-            "the key named by the existing config must be created"
-        );
+        assert!(key_path.exists(), "the key named by the existing config must be created");
         let loaded = load_key_from_disk(&key_path).unwrap();
         assert_eq!(key.to_bytes(), loaded.to_bytes());
 

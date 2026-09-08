@@ -39,10 +39,7 @@ pub struct Relay<T: Clone + Debug, R: RoutingTable = NetRouteHandle> {
 
 impl<T: Clone + Debug + Send + Sync + 'static, R: RoutingTable> Relay<T, R> {
     pub fn new(handle: R) -> Self {
-        Relay {
-            handle: Mutex::new(handle),
-            peer_map: DashMap::new(),
-        }
+        Relay { handle: Mutex::new(handle), peer_map: DashMap::new() }
     }
 
     /// Look up the peer bound to `dest_ip`.
@@ -80,13 +77,8 @@ impl<T: Clone + Debug + Send + Sync + 'static, R: RoutingTable> Relay<T, R> {
                     Err(err)
                 }
                 Ok(scoped) => {
-                    self.peer_map.insert(
-                        *ip,
-                        PeerValue {
-                            value: Some(value_ref.clone()),
-                            route: scoped,
-                        },
-                    );
+                    self.peer_map
+                        .insert(*ip, PeerValue { value: Some(value_ref.clone()), route: scoped });
                     Ok(())
                 }
             }
@@ -121,11 +113,7 @@ impl<T: Clone + Debug + Send + Sync + 'static, R: RoutingTable> Relay<T, R> {
         value: T,
     ) -> Result<(), ThinStatus> {
         let keep: HashSet<IpAddr> = current.iter().copied().collect();
-        let stale: Vec<IpAddr> = previous
-            .iter()
-            .copied()
-            .filter(|ip| !keep.contains(ip))
-            .collect();
+        let stale: Vec<IpAddr> = previous.iter().copied().filter(|ip| !keep.contains(ip)).collect();
         if !stale.is_empty() {
             self.remove(&stale).await;
         }
@@ -149,8 +137,7 @@ impl<T: Clone + Debug + Send + Sync + 'static, R: RoutingTable> Relay<T, R> {
 
     pub async fn remove(&self, dest_ips: &[IpAddr]) {
         let _span = tracing::info_span!("p2p_vpn_relay_remove");
-        self.remove_locked(&self.handle.lock().await, dest_ips)
-            .await
+        self.remove_locked(&self.handle.lock().await, dest_ips).await
     }
 
     async fn remove_locked(&self, locked: &MutexGuard<'_, R>, dest_ips: &[IpAddr]) {
@@ -211,10 +198,7 @@ mod tests {
     impl RoutingTable for MockRouteHandle {
         async fn insert(&self, dest_ip: IpAddr) -> Result<(), std::io::Error> {
             if *self.should_fail.lock().unwrap() {
-                return Err(Error::new(
-                    ErrorKind::PermissionDenied,
-                    "Mock OS route insert error",
-                ));
+                return Err(Error::new(ErrorKind::PermissionDenied, "Mock OS route insert error"));
             }
             self.active_routes.lock().unwrap().insert(dest_ip);
             Ok(())
@@ -255,10 +239,7 @@ mod tests {
         let result = relay.insert(&ips, peer_val.clone()).await;
 
         assert!(result.is_ok(), "Insert should succeed for valid IP");
-        assert!(
-            mock_handle.has_route(&ip),
-            "Route must be registered in mock table"
-        );
+        assert!(mock_handle.has_route(&ip), "Route must be registered in mock table");
         assert_eq!(relay.get(&ip), connected("peer_1".to_string()));
 
         relay.remove(&ips).await;
@@ -317,24 +298,14 @@ mod tests {
         let remove_ips = vec![ip1];
         relay.remove(&remove_ips).await;
 
-        assert_eq!(
-            relay.get(&ip1),
-            None,
-            "ip1 should be removed from relay map"
-        );
-        assert!(
-            !mock_handle.has_route(&ip1),
-            "ip1 should be removed from mock routing table"
-        );
+        assert_eq!(relay.get(&ip1), None, "ip1 should be removed from relay map");
+        assert!(!mock_handle.has_route(&ip1), "ip1 should be removed from mock routing table");
         assert_eq!(
             relay.get(&ip2),
             connected("node_alpha".to_string()),
             "ip2 should remain in map"
         );
-        assert!(
-            mock_handle.has_route(&ip2),
-            "ip2 should remain in mock routing table"
-        );
+        assert!(mock_handle.has_route(&ip2), "ip2 should remain in mock routing table");
 
         relay.remove(&[ip2]).await;
     }
@@ -377,20 +348,9 @@ mod tests {
 
         let result = relay.insert(&ips, "fail_node".to_string()).await;
 
-        assert!(
-            result.is_err(),
-            "Insert must return error when route creation fails"
-        );
-        assert_eq!(
-            relay.get(&ip1),
-            None,
-            "Map must rollback and remain empty on failure"
-        );
-        assert_eq!(
-            relay.get(&ip2),
-            None,
-            "Map must rollback and remain empty on failure"
-        );
+        assert!(result.is_err(), "Insert must return error when route creation fails");
+        assert_eq!(relay.get(&ip1), None, "Map must rollback and remain empty on failure");
+        assert_eq!(relay.get(&ip2), None, "Map must rollback and remain empty on failure");
     }
 
     #[tokio::test]
@@ -508,10 +468,7 @@ mod tests {
 
         // The peer reconfigured its network: keeps ip2, drops ip1, adds ip3.
         let current = vec![ip2, ip3];
-        relay
-            .reconcile(&current, &previous, "v2".to_string())
-            .await
-            .unwrap();
+        relay.reconcile(&current, &previous, "v2".to_string()).await.unwrap();
 
         assert_eq!(relay.get(&ip1), None, "dropped address is withdrawn");
         assert!(!mock_handle.has_route(&ip1), "its route is torn down");

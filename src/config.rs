@@ -185,11 +185,7 @@ mod tests {
 
         assert_eq!(
             config.discovery,
-            NodeExtraConfig {
-                n0_discovery: N0Discovery::NoN0,
-                use_mdns: true,
-                use_dht: false,
-            }
+            NodeExtraConfig { n0_discovery: N0Discovery::NoN0, use_mdns: true, use_dht: false }
         );
     }
 
@@ -207,10 +203,7 @@ mod tests {
 
         assert_eq!(
             config.discovery,
-            NodeExtraConfig {
-                use_dht: false,
-                ..NodeExtraConfig::default()
-            },
+            NodeExtraConfig { use_dht: false, ..NodeExtraConfig::default() },
             "unset fields must fall back to NodeExtraConfig::default()"
         );
     }
@@ -263,10 +256,7 @@ mod tests {
 
         let config = Config::parse(&toml).expect("real docker-compose peer key should decode");
 
-        assert_eq!(
-            config.peers["alice"],
-            PublicKey::from_z32(ALICE_KEY_Z32).unwrap()
-        );
+        assert_eq!(config.peers["alice"], PublicKey::from_z32(ALICE_KEY_Z32).unwrap());
     }
 
     #[test]
@@ -379,10 +369,7 @@ mod tests {
         );
 
         let mut path = std::env::temp_dir();
-        path.push(format!(
-            "zeroconf-p2p-vpn-config-test-{}.toml",
-            std::process::id()
-        ));
+        path.push(format!("zeroconf-p2p-vpn-config-test-{}.toml", std::process::id()));
         std::fs::write(&path, toml).unwrap();
 
         let config = Config::load(&path).expect("config file should load");
@@ -404,10 +391,8 @@ mod tests {
             private_key_path = "keys/host.raw"
         "#;
 
-        let dir = std::env::temp_dir().join(format!(
-            "zeroconf-p2p-vpn-config-test-dir-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir()
+            .join(format!("zeroconf-p2p-vpn-config-test-dir-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
         std::fs::write(&path, toml).unwrap();
@@ -428,10 +413,8 @@ mod tests {
             private_key_path = "keys/host.raw"
         "#;
 
-        let path = PathBuf::from(format!(
-            "zeroconf-p2p-vpn-config-test-bare-{}.toml",
-            std::process::id()
-        ));
+        let path =
+            PathBuf::from(format!("zeroconf-p2p-vpn-config-test-bare-{}.toml", std::process::id()));
         std::fs::write(&path, toml).unwrap();
 
         let config = Config::load(&path).expect("config file should load");
@@ -476,11 +459,8 @@ mod tests {
         assert_eq!(charlie.peers["alice"], alice_secret.public());
 
         // The integration test must stay local-network-only: no n0.computer relay, no DHT.
-        let local_only = NodeExtraConfig {
-            n0_discovery: N0Discovery::NoN0,
-            use_mdns: true,
-            use_dht: false,
-        };
+        let local_only =
+            NodeExtraConfig { n0_discovery: N0Discovery::NoN0, use_mdns: true, use_dht: false };
         assert_eq!(alice.discovery, local_only);
         assert_eq!(bob.discovery, local_only);
         assert_eq!(charlie.discovery, local_only);

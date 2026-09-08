@@ -68,17 +68,12 @@ mod tests {
     fn test_validate_addresses_all_valid() {
         let secret_key = SecretKey::generate();
         let public_key = secret_key.public();
-        let allowed_nets = vec![
-            IpNet::from_str("10.0.0.0/8").unwrap(),
-            IpNet::from_str("2001:db8::/32").unwrap(),
-        ];
+        let allowed_nets =
+            vec![IpNet::from_str("10.0.0.0/8").unwrap(), IpNet::from_str("2001:db8::/32").unwrap()];
         let advertise = proto::v1::Advertise {
             own_addresses: vec![
                 make_host_address(&IpNet::from_str("10.1.2.3/24").unwrap(), &secret_key),
-                make_host_address(
-                    &IpNet::from_str("2001:db8:cafe::42/48").unwrap(),
-                    &secret_key,
-                ),
+                make_host_address(&IpNet::from_str("2001:db8:cafe::42/48").unwrap(), &secret_key),
             ],
         };
 
@@ -162,9 +157,8 @@ mod tests {
         let net = IpNet::from_str("10.1.1.0/24").unwrap();
 
         // Alice signs it, but Bob will check it against Charlie's public key
-        let advertise = proto::v1::Advertise {
-            own_addresses: vec![make_host_address(&net, &alice_key)],
-        };
+        let advertise =
+            proto::v1::Advertise { own_addresses: vec![make_host_address(&net, &alice_key)] };
 
         let (valid, errors) = validate_addresses(&allowed_nets, &advertise, &charlie_key.public());
 
@@ -201,12 +195,7 @@ mod tests {
         assert_eq!(valid.len(), 1);
         assert_eq!(errors.len(), 1);
 
-        assert!(
-            valid_net.contains(&valid[0]),
-            "{} should be in {}",
-            valid[0],
-            valid_net
-        );
+        assert!(valid_net.contains(&valid[0]), "{} should be in {}", valid[0], valid_net);
         assert!(format!("{:?}", errors[0]).contains("parse-fail"));
     }
 }

@@ -31,11 +31,7 @@ impl PeerLink {
 
         let drop_guard = cancellation.clone().drop_guard();
 
-        let actor = Actor::new(
-            self.connector.local.addr().id,
-            self.connector.peer,
-            watch_tx,
-        );
+        let actor = Actor::new(self.connector.local.addr().id, self.connector.peer, watch_tx);
         let (actor, actor_join) = actor.spawn(cancellation.clone());
         let outgoing_join = OutgoingConnectLoop::new(
             self.connector.clone(),
@@ -74,19 +70,12 @@ impl PeerLinkHandle {
     /// established yet.
     pub async fn next_connection(&mut self) -> Result<Option<Connection>, watch::error::RecvError> {
         self.watch_rx.changed().await?;
-        Ok(self
-            .watch_rx
-            .borrow_and_update()
-            .as_ref()
-            .map(|c| c.conn.clone()))
+        Ok(self.watch_rx.borrow_and_update().as_ref().map(|c| c.conn.clone()))
     }
 
     /// Returns a receiver object that accepts incoming connections.
     pub fn incoming_receiver(&self) -> IncomingReceiver {
-        IncomingReceiver {
-            conn_tx: self.actor.conn_tx.clone(),
-            peer_id: self.connector.peer,
-        }
+        IncomingReceiver { conn_tx: self.actor.conn_tx.clone(), peer_id: self.connector.peer }
     }
 }
 
@@ -102,17 +91,11 @@ impl IncomingReceiver {
         let conn = IrohConnection { conn };
         if let Err(builder) = crate::check_eq!(conn.conn.remote_id(), self.peer_id) {
             let mut builder = builder.code(ErrorCode::InvalidArgument);
-            let _ = write!(
-                builder,
-                "; remote peer address doesn't match the configured one"
-            );
+            let _ = write!(builder, "; remote peer address doesn't match the configured one");
             let status = builder.build();
             conn.close(status.clone());
             return Err(status);
         }
-        self.conn_tx
-            .send(conn)
-            .await
-            .map_err(|e| e.error_code(ErrorCode::FailedPrecondition))
+        self.conn_tx.send(conn).await.map_err(|e| e.error_code(ErrorCode::FailedPrecondition))
     }
 }
