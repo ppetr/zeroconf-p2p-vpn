@@ -1,4 +1,6 @@
 use futures_util::future::join_all;
+use iroh::endpoint::Connection;
+use iroh_persistent::PersistentConnection;
 use metrics::IntoLabels;
 use secure_p2p_transport::{load_key_from_disk, TransportNode};
 use std::env;
@@ -97,11 +99,9 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let net_route_handle = route::NetRouteHandle::new(tun.if_index())?;
 
-    let alpn = Arc::new(b"zeroconf-p2p-vpn/vpn/1.0".to_vec());
-    // Retry outgoing connects forever (the default caps total elapsed time).
-    let backoff = backoff::ExponentialBackoff { max_elapsed_time: None, ..Default::default() };
+    let alpn: Vec<u8> = b"zeroconf-p2p-vpn/vpn/1.0".to_vec();
 
-    let node = TransportNode::new(secret_key.clone(), alpn.to_vec(), &config.discovery).await?;
+    let node = TransportNode::new(secret_key.clone(), alpn.clone(), &config.discovery).await?;
     let endpoint = node.endpoint();
 
     let (rx_uring, mut rx_handle) = mpsc::channel::<tun::RxPacket>(64);
@@ -136,14 +136,20 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut links = Vec::with_capacity(config.peers.len());
     for (name, peer_key) in &config.peers {
         info!("Configuring peer '{}': '{}'", name, peer_key.to_z32());
-        let link = connection::PeerLink::new(connection::IrohConnector {
-            local: endpoint.clone(),
-            peer: *peer_key,
-            alpn: alpn.clone(),
-        });
-        let (handle, _join) = link.spawn(backoff.clone(), root_cancel.child_token());
-        incoming_router.register(*peer_key, handle.incoming_receiver());
-        links.push((name.clone(), handle));
+        let (incoming_tx, incoming_rx) = mpsc::channel::<Connection>(4);
+        incoming_router.register(*peer_key, incoming_tx);
+        let link = PersistentConnection::builder(endpoint.clone(), *peer_key, alpn.clone())
+            .incoming(futures_util::stream::unfold(incoming_rx, |mut rx| async move {
+                rx.recv().await.map(|conn| (conn, rx))
+            }))
+            // Matches the QUIC close code this project used to send for this kind of internal
+            // housekeeping close before switching to `iroh_persistent`
+            // (`thin_status::ErrorCode::Aborted`). Nothing currently parses it back on either
+            // side; kept only for continuity/debuggability on the wire.
+            .close_code(10u32)
+            .cancellation(root_cancel.child_token())
+            .spawn();
+        links.push((name.clone(), link));
     }
 
     // The global listener accepts connections from any peer; the router forwards each to the

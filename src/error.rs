@@ -98,39 +98,6 @@ fn error_kind_str(kind: ErrorKind) -> &'static str {
     }
 }
 
-/// If `result` is `Cancelled`, converts it into a `()`.
-pub fn mask_cancelled(result: Result<(), ThinStatus>) -> Result<(), ThinStatus> {
-    match result {
-        Err(err) if err.code() == Some(ErrorCode::Cancelled) => {
-            tracing::debug!(error = ?err, "Task cancelled");
-            Ok(())
-        }
-        r => r,
-    }
-}
-
-/// If `result` reports a cancelled `JoinError`, it's converted to `Cancelled`.
-/// Any other error (panic) is converted into `Internal`.
-pub fn unwrap_join_handle<T>(
-    result: Result<Result<T, ThinStatus>, tokio::task::JoinError>,
-) -> Result<T, ThinStatus> {
-    match result {
-        Ok(err) => err,
-        Err(join_err) if join_err.is_cancelled() => Err(join_err.error_code(ErrorCode::Cancelled)),
-        Err(join_err) => {
-            tracing::error!(error = ?join_err, "panicked unexpectedly");
-            Err(join_err.error_code(ErrorCode::Internal))
-        }
-    }
-}
-
-/// Awaits `handle` and unwraps its status using `unwrap_join_handle` and `mask_cancelled`.
-pub async fn await_loop_result(
-    handle: tokio::task::JoinHandle<Result<(), ThinStatus>>,
-) -> Result<(), ThinStatus> {
-    mask_cancelled(unwrap_join_handle(handle.await))
-}
-
 #[macro_export]
 macro_rules! check_eq {
     ($left:expr, $right:expr) => {
@@ -211,56 +178,6 @@ mod tests {
         assert_eq!(error_kind_str(ErrorKind::WouldBlock), "WouldBlock");
         assert_eq!(error_kind_str(ErrorKind::UnexpectedEof), "UnexpectedEof");
         assert_eq!(error_kind_str(ErrorKind::Other), "Other");
-    }
-
-    #[test]
-    fn mask_cancelled_swallows_only_the_cancelled_code() {
-        assert_eq!(mask_cancelled(Ok(())), Ok(()));
-        assert_eq!(mask_cancelled(Err(ThinStatus::builder(ErrorCode::Cancelled).build())), Ok(()));
-        let internal = ThinStatus::builder(ErrorCode::Internal).build();
-        assert_eq!(mask_cancelled(Err(internal.clone())), Err(internal));
-    }
-
-    #[tokio::test]
-    async fn unwrap_join_handle_passes_through_a_finished_task_result() {
-        let ok = tokio::spawn(async { Ok::<i32, ThinStatus>(7) });
-        assert_eq!(unwrap_join_handle(ok.await), Ok(7));
-
-        let failed = tokio::spawn(async {
-            Err::<(), ThinStatus>(ThinStatus::builder(ErrorCode::NotFound).build())
-        });
-        assert_eq!(unwrap_join_handle(failed.await).unwrap_err().code(), Some(ErrorCode::NotFound));
-    }
-
-    #[tokio::test]
-    async fn unwrap_join_handle_reports_an_aborted_task_as_cancelled() {
-        let handle = tokio::spawn(std::future::pending::<Result<(), ThinStatus>>());
-        handle.abort();
-        let err = unwrap_join_handle(handle.await).unwrap_err();
-        assert_eq!(err.code(), Some(ErrorCode::Cancelled));
-    }
-
-    #[tokio::test]
-    async fn unwrap_join_handle_reports_a_panicked_task_as_internal() {
-        let prev = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {}));
-        let handle: tokio::task::JoinHandle<Result<(), ThinStatus>> =
-            tokio::spawn(async { panic!("boom") });
-        let joined = handle.await;
-        std::panic::set_hook(prev);
-
-        let err = unwrap_join_handle(joined).unwrap_err();
-        assert_eq!(err.code(), Some(ErrorCode::Internal));
-    }
-
-    #[tokio::test]
-    async fn await_loop_result_masks_an_aborted_loop() {
-        let ok = tokio::spawn(async { Ok::<(), ThinStatus>(()) });
-        assert_eq!(await_loop_result(ok).await, Ok(()));
-
-        let aborted = tokio::spawn(std::future::pending::<Result<(), ThinStatus>>());
-        aborted.abort();
-        assert_eq!(await_loop_result(aborted).await, Ok(()));
     }
 
     #[test]

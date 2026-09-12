@@ -1,10 +1,11 @@
 //! Per-peer supervision loop.
 //!
-//! `PeerSession` owns one `connection::PeerLinkHandle` and, for every connection that link yields,
-//! runs the handshake, registers the negotiated routes in the shared `Relay`, and pumps inbound
-//! datagrams to the TUN write side until the connection drops. It then parks the peer's routes
-//! (keeps them installed but marked offline, so `tun_rx_loop` answers ICMP host-unreachable) and
-//! waits for the link to reconnect. Routes are only fully withdrawn when the session ends.
+//! `PeerSession` owns one `iroh_persistent::PersistentConnection` and, for every connection that
+//! link yields, runs the handshake, registers the negotiated routes in the shared `Relay`, and
+//! pumps inbound datagrams to the TUN write side until the connection drops. It then parks the
+//! peer's routes (keeps them installed but marked offline, so `tun_rx_loop` answers ICMP
+//! host-unreachable) and waits for the link to reconnect. Routes are only fully withdrawn when
+//! the session ends.
 //!
 //! This is the multi-peer generalization of what `main.rs` used to do inline for a single peer.
 //! Unlike that loop, a failure here (handshake, relay insert, receive loop) is logged and counted
@@ -14,11 +15,11 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use iroh::endpoint::Connection;
+use iroh_persistent::PersistentConnection;
 use metrics::{counter, IntoLabels};
 use tokio::sync::mpsc;
 use tracing::{info, info_span, warn, Instrument};
 
-use crate::connection::PeerLinkHandle;
 use crate::error::ExtractedErrorCode;
 use crate::peer::{self, CommonPeerConfig, ConnectedPeer};
 use crate::proto;
@@ -38,7 +39,7 @@ pub struct PeerSessionConfig {
 /// Drives a single peer: reconnect loop, handshake, route registration, receive loop.
 pub struct PeerSession {
     config: PeerSessionConfig,
-    link: PeerLinkHandle,
+    link: PersistentConnection,
     relay: Arc<Relay<ConnectedPeer>>,
     tx_packet: mpsc::Sender<tun::TxPacket>,
 }
@@ -46,19 +47,19 @@ pub struct PeerSession {
 impl PeerSession {
     pub fn new(
         config: PeerSessionConfig,
-        link: PeerLinkHandle,
+        link: PersistentConnection,
         relay: Arc<Relay<ConnectedPeer>>,
         tx_packet: mpsc::Sender<tun::TxPacket>,
     ) -> Self {
         PeerSession { config, link, relay, tx_packet }
     }
 
-    /// Runs until the underlying `PeerLink` task ends; on every other error it logs, counts, and
-    /// retries.
+    /// Runs until the underlying `PersistentConnection`'s background tasks end; on every other
+    /// error it logs, counts, and retries.
     pub async fn run(mut self) {
         let mut routes: Vec<IpAddr> = Vec::new();
         loop {
-            let conn = match self.link.next_connection().await {
+            let conn = match self.link.changed().await {
                 Ok(Some(conn)) => conn,
                 Ok(None) => {
                     info!(peer = %self.config.name, "Peer disconnected");
@@ -66,7 +67,8 @@ impl PeerSession {
                     continue;
                 }
                 Err(err) => {
-                    // The internal `PeerLink` task is gone; this session can't recover.
+                    // The internal `PersistentConnection` task is gone; this session can't
+                    // recover.
                     counter!(
                         description: "Peer sessions stopped because their link task ended",
                         "p2p_vpn_peer_session_link_ended",
