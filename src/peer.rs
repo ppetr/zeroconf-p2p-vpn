@@ -151,6 +151,14 @@ impl Peer {
     /// Returns the set of routes negotiated as part of the handshake.
     pub async fn handshake(self) -> Result<(ConnectedPeer, RoutesChanged)> {
         wait_for_direct(&self.config.conn).await?;
+        let direct_addr = remote_addr(&self.config.conn)
+            .map(|addr| addr.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        tracing::info!(
+            peer = self.public_key().to_z32(),
+            remote_addr = direct_addr,
+            "Direct connection confirmed"
+        );
         let handshake = async {
             let (send, receive) = tokio::join!(self.send_advertise(), self.recv_control());
             send?;

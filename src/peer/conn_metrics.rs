@@ -9,6 +9,7 @@ pub struct QuinnMetrics {
     pub datagram_tx: Gauge,
     pub datagram_rx: Gauge,
     pub rtt: Gauge,
+    pub relayed: Gauge,
     pub cwnd: Gauge,
     pub congestion_events: Gauge,
     pub lost_packets: Gauge,
@@ -39,6 +40,11 @@ impl QuinnMetrics {
                 description: "Current best estimate of this connection’s latency (round-trip-time)",
                 unit: Unit::Seconds,
                 "p2p_vpn_peer_quinn_rtt_seconds",
+                labels.clone(),
+            ),
+            relayed: gauge!(
+                description: "Whether the connection's currently selected path is relayed (1) or direct (0)",
+                "p2p_vpn_peer_quinn_relayed",
                 labels.clone(),
             ),
             cwnd: gauge!(
@@ -113,6 +119,7 @@ impl QuinnMetrics {
                 }
                 self.update_connection(&connection.stats());
                 if let Some(path) = connection.paths().into_iter().find(|path| path.is_selected()) {
+                    self.relayed.set(if path.is_relay() { 1.0 } else { 0.0 });
                     if let Some(stats) = path.stats() {
                         self.update_path(&stats);
                     } else {
