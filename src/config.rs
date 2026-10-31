@@ -27,6 +27,17 @@ pub struct Config {
     /// Peer discovery settings, from `[discovery]`. Defaults to the n0.computer relay plus mDNS
     /// and the DHT (`NodeExtraConfig::default()`).
     pub discovery: NodeExtraConfig,
+    /// DNS resolution of peer names, from `[dns]`. `None` (the default, no `[dns]` section)
+    /// disables it entirely.
+    pub dns: Option<DnsConfig>,
+}
+
+/// Settings for resolving peer names (the `[peers]` table keys) via DNS, from `[dns]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DnsConfig {
+    /// The DNS suffix peer names are served under, e.g. a peer named `alice` becomes
+    /// `alice.<suffix>`, from `[dns] suffix`.
+    pub suffix: String,
 }
 
 /// Settings for the OS-level TUN network interface.
@@ -71,6 +82,13 @@ struct RawConfig {
     tun: RawTun,
     #[serde(default)]
     discovery: NodeExtraConfig,
+    #[serde(default)]
+    dns: Option<RawDns>,
+}
+
+#[derive(Deserialize)]
+struct RawDns {
+    suffix: String,
 }
 
 #[derive(Deserialize)]
@@ -120,6 +138,7 @@ impl TryFrom<RawConfig> for Config {
                     .unwrap_or_else(|| DEFAULT_TUN_DESCRIPTION.to_string()),
             },
             discovery: raw.discovery,
+            dns: raw.dns.map(|raw_dns| DnsConfig { suffix: raw_dns.suffix }),
         })
     }
 }
@@ -307,6 +326,31 @@ mod tests {
     }
 
     #[test]
+    fn test_dns_defaults_to_disabled_when_missing() {
+        let toml = r#"
+            [host]
+            private_key_path = "/foo/bar"
+        "#;
+
+        let config = Config::parse(toml).expect("a missing [dns] section must be allowed");
+        assert_eq!(config.dns, None);
+    }
+
+    #[test]
+    fn test_parses_dns_section() {
+        let toml = r#"
+            [host]
+            private_key_path = "/foo/bar"
+
+            [dns]
+            suffix = "p2p"
+        "#;
+
+        let config = Config::parse(toml).expect("valid config should parse");
+        assert_eq!(config.dns, Some(DnsConfig { suffix: "p2p".to_string() }));
+    }
+
+    #[test]
     fn test_rejects_subnet_out_of_range() {
         let toml = r#"
             [host]
@@ -464,5 +508,11 @@ mod tests {
         assert_eq!(alice.discovery, local_only);
         assert_eq!(bob.discovery, local_only);
         assert_eq!(charlie.discovery, local_only);
+
+        // All three resolve peer names under the same DNS suffix.
+        let dns_p2p = Some(DnsConfig { suffix: "p2p".to_string() });
+        assert_eq!(alice.dns, dns_p2p);
+        assert_eq!(bob.dns, dns_p2p);
+        assert_eq!(charlie.dns, dns_p2p);
     }
 }

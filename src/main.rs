@@ -1,9 +1,12 @@
+use dns_host_config::{DnsRoute, DnsRouteConfig};
 use futures_util::future::join_all;
 use iroh::endpoint::Connection;
 use iroh_persistent::PersistentConnection;
 use metrics::IntoLabels;
+use crate::route::RoutingTable;
 use secure_p2p_transport::{load_key_from_disk, TransportNode};
 use std::env;
+use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -14,6 +17,7 @@ mod addr;
 mod buffer_pool;
 mod config;
 mod connection;
+mod dns;
 mod error;
 mod generate;
 mod osal;
@@ -128,6 +132,53 @@ async fn main() -> Result<(), anyhow::Error> {
     };
     let common_config = Arc::new(peer::CommonPeerConfig::new(icmp_gateway.clone()));
 
+    let dns_names =
+        config.dns.as_ref().map(|dns_cfg| Arc::new(dns::PeerNames::new(dns_cfg.suffix.clone())));
+    let dns_dispatch = match (&config.dns, &dns_names) {
+        (Some(dns_cfg), Some(names)) => {
+            // A dedicated address for our own local resolver, derived from (and guaranteed
+            // distinct from) our own VPN address. It only ever gets a kernel route below, never
+            // `tun.add_if_addr`: an address actually assigned to the interface is delivered
+            // locally by the kernel (loopback-style) and would never reach `tun_rx_loop`.
+            let dns_server_addr = match own_net.addr() {
+                IpAddr::V6(addr) => Ipv6Addr::from_bits(addr.to_bits() ^ 1),
+                IpAddr::V4(_) => unreachable!("VPN addresses are always IPv6"),
+            };
+            net_route_handle.insert(IpAddr::V6(dns_server_addr)).await?;
+            info!(
+                %dns_server_addr, suffix = %dns_cfg.suffix,
+                "DNS resolution of peer names enabled"
+            );
+
+            #[cfg(target_os = "linux")]
+            {
+                let route_config = DnsRouteConfig::new(
+                    vec![IpAddr::V6(dns_server_addr)],
+                    vec![dns_cfg.suffix.clone()],
+                )?;
+                let mut host_dns = dns_host_config::linux::LinuxDnsRoute::probe(
+                    env!("CARGO_PKG_NAME"),
+                )
+                .await;
+                if let Err(err) = host_dns.set(&tun.if_name, &route_config).await {
+                    tracing::warn!(
+                        error = ?err,
+                        "Failed to configure the host's DNS resolver for peer names"
+                    );
+                }
+            }
+            #[cfg(not(target_os = "linux"))]
+            tracing::warn!(
+                "No automatic host DNS integration exists yet for this platform; point the \
+                 system resolver at {dns_server_addr} for '{}' lookups to work",
+                dns_cfg.suffix
+            );
+
+            Some((dns_stack::dns::DnsConfig { server_addr: dns_server_addr }, names.clone()))
+        }
+        _ => None,
+    };
+
     // TODO: Cancellation.
     let root_cancel = CancellationToken::new();
     let relay: Arc<relay::Relay<peer::ConnectedPeer>> =
@@ -162,6 +213,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 name,
                 common: common_config.clone(),
                 advertise: advertise.clone(),
+                dns_names: dns_names.clone(),
             },
             handle,
             relay.clone(),
@@ -180,6 +232,19 @@ async fn main() -> Result<(), anyhow::Error> {
             let dest_ip = tun::inet_slice(&packet.data).ok().as_ref().and_then(tun::destination_ip);
             if let Some(dest_ip) = &dest_ip {
                 tracing::record_all!(span, dest_ip = ?dest_ip);
+            }
+            if let Some((dns_cfg, resolver)) = &dns_dispatch {
+                if dest_ip == Some(IpAddr::V6(dns_cfg.server_addr)) {
+                    if let Some(reply) =
+                        dns_stack::dns::handle_packet(dns_cfg, resolver.as_ref(), packet.data.as_ref())
+                            .await
+                    {
+                        if let Err(err) = tx_handle.try_send(tun::TxPacket::new(reply.into())) {
+                            tracing::debug!(err = ?err, "Error sending DNS reply");
+                        }
+                    }
+                    continue;
+                }
             }
             let icmp_packet: Option<_> = match dest_ip.and_then(|ip| relay.get(&ip)) {
                 Some(relay::Dispatch::Connected(peer)) => {

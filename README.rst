@@ -126,3 +126,42 @@ Regarding the "late-joiner" scenario where a consumer connects mid-stream and mi
 3. **Future Mitigation:** If full state synchronization is required for specific operational requirements, we will implement a lightweight, on-demand state-sync protocol to broadcast the current "active span tree" upon a new subscriber's connection.
 
 This design prioritizes performance and standard adherence while remaining flexible enough to accommodate future analytical requirements.
+
+DNS for Peer Names
+^^^^^^^^^^^^^^^^^^^
+
+Peers are otherwise reachable only by their VPN IP address. The ``[peers]`` config table already
+gives every peer a human-readable name (e.g. ``alice``), so an optional ``[dns] suffix = "..."``
+config section turns that mapping into real DNS: ``alice.<suffix>`` resolves to whatever address
+``alice`` is currently reachable at.
+
+This reuses two independent crates from a separate ``dns-announce`` workspace: ``dns-stack``'s
+plain ``dns::handle_packet`` function (a transport-agnostic, in-process DNS responder; its
+IPv6 RA/RDNSS beacon is **not** used here, see below) answers queries for ``<peer-name>.<suffix>``
+from the peer-name -> address map ``session.rs`` keeps in sync as peers connect/disconnect;
+anything outside that suffix gets ``REFUSED`` so the host's other resolvers keep working.
+``dns-host-config`` then pushes that resolver's address and the routing-only ``suffix`` domain
+directly into the host's own DNS configuration (``systemd-resolved`` first, with ``resolvconf``
+and a static ``/etc/resolv.conf`` edit as fallbacks) and withdraws it again on shutdown.
+
+The resolver's address is never assigned to the ``tun`` interface itself (``tun.add_if_addr``) --
+only given a kernel route to it, the same way peer addresses are. An address actually assigned to
+an interface is delivered locally by the kernel (loopback-style) and would never reach
+``tun_rx_loop``'s packet handler.
+
+**Why not the RA/RDNSS beacon:** ``dns-stack``'s own setup guide (``dns-announce``'s
+``crates/dns-stack/docs/setup.linux.md``) distinguishes two deployment shapes: RA/RDNSS
+auto-discovery is for announcing a resolver to **clients you don't control** on a shared link;
+directly configuring the host's resolver (what ``dns-host-config`` does) is for when **you own the
+host** -- exactly this project's situation on both ends of every tunnel. Skipping RA also sidesteps
+its real gotchas: a ``fe80::`` source address requirement, ``systemd-networkd`` flushing
+out-of-band addresses, and routing domains needing at least two labels.
+
+**Platform status:** ``dns-host-config``'s Linux chain (``systemd-resolved`` /
+``resolvconf`` / static ``/etc/resolv.conf``) is implemented and is what this project wires up.
+Windows (NRPT) exists in ``dns-host-config`` but is not yet wired up here or verified against a
+real Windows host; macOS has no backend yet (``/etc/resolver/<suffix>`` is designed but
+unimplemented -- see ``dns-announce``'s ``docs/design-dns-host-config.md``). On any platform
+without a wired-up backend, the in-process resolver still answers queries sent to it directly --
+only the automatic host-side configuration is missing, and the system resolver would need to be
+pointed at it by hand.

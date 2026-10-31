@@ -20,6 +20,7 @@ use metrics::{counter, IntoLabels};
 use tokio::sync::mpsc;
 use tracing::{info, info_span, warn, Instrument};
 
+use crate::dns::PeerNames;
 use crate::error::ExtractedErrorCode;
 use crate::peer::{self, CommonPeerConfig, ConnectedPeer};
 use crate::proto;
@@ -29,11 +30,14 @@ use crate::tun;
 /// Static per-peer configuration for a `PeerSession`.
 #[derive(Clone, Debug)]
 pub struct PeerSessionConfig {
-    /// Human-readable peer name from the configuration's `[peers]` table; used only for logs and
-    /// the `peer` metric label.
+    /// Human-readable peer name from the configuration's `[peers]` table; used for logs, the
+    /// `peer` metric label, and (if set) the name's DNS entry.
     pub name: String,
     pub common: Arc<CommonPeerConfig>,
     pub advertise: proto::v1::Advertise,
+    /// DNS peer-name registry to keep in sync with this peer's negotiated addresses, if DNS
+    /// resolution (`[dns]` in the config) is enabled.
+    pub dns_names: Option<Arc<PeerNames>>,
 }
 
 /// Drives a single peer: reconnect loop, handshake, route registration, receive loop.
@@ -136,6 +140,9 @@ impl PeerSession {
             return;
         }
         *routes = changed.0.clone();
+        if let Some(dns_names) = &self.config.dns_names {
+            dns_names.set(&self.config.name, routes.clone());
+        }
 
         if let Err(err) = connected.recv_loop(self.tx_packet.clone()).await {
             self.count_error(
@@ -157,6 +164,9 @@ impl PeerSession {
         if !routes.is_empty() {
             self.relay.remove(routes).await;
             routes.clear();
+        }
+        if let Some(dns_names) = &self.config.dns_names {
+            dns_names.remove(&self.config.name);
         }
     }
 

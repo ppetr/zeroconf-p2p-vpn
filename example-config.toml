@@ -19,6 +19,12 @@ bob = "..."
 # built-in description if missing.
 # description = "zeroconf-p2p-vpn VPN interface"
 
+[dns]
+# If this section is present, peer names from [peers] above become resolvable
+# as DNS names under this suffix, e.g. "alice.p2p". If missing entirely, DNS
+# resolution of peer names is disabled.
+# suffix = "p2p"
+
 [discovery]
 # Peer discovery settings. If this section is missing entirely, all three
 # fields default to using the n0.computer relay plus mDNS and the DHT (the

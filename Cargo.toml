@@ -7,10 +7,13 @@ license = "Apache 2.0"
 
 [dependencies]
 anyhow = "1.0"
+async-trait = "0.1"
 backoff = "0.4"
 bytes = "1.6"
 buf-list = "1.1"
 dashmap = "6.1"
+dns-host-config = "0.1.0"
+dns-stack = "0.1.1"
 etherparse = "0.20"
 futures-util = "0.3.31"
 ipnet = "2.12.0"
