@@ -47,6 +47,18 @@ wait_ping() {
     return 1
 }
 
+# Resolves `name` via `getent ahosts` from inside node `$1`, retrying for up to ~30s (a peer's DNS
+# entry only appears once its handshake completes, the same timing dependency wait_ping has above)
+# until the answer contains `$3`.
+wait_dns() {
+    local node="$1" name="$2" expected_addr="$3"
+    for _ in $(seq 30) ; do
+        docker compose exec -T "$node" getent ahosts "$name" 2>/dev/null | grep -qF "$expected_addr" && return 0
+        sleep 1
+    done
+    return 1
+}
+
 send_data() {
     set -e
     local wc_file="$1"
@@ -90,5 +102,33 @@ send_data() {
     run ping_once node-bob "$CHARLIE_VPN"
     [ "$status" -ne 0 ]
     run ping_once node-charlie "$BOB_VPN"
+    [ "$status" -ne 0 ]
+}
+
+@test "Peer names resolve via DNS, and other lookups still fall through" {
+    # None of these containers run systemd/D-Bus or have `resolvconf` installed, so this
+    # exercises dns-host-config's last-resort backend: a direct, static /etc/resolv.conf edit.
+    run wait_dns node-alice bob.p2p "$BOB_VPN"
+    [ "$status" -eq 0 ]
+    run wait_dns node-alice charlie.p2p "$CHARLIE_VPN"
+    [ "$status" -eq 0 ]
+    run wait_dns node-bob alice.p2p "$ALICE_VPN"
+    [ "$status" -eq 0 ]
+    run wait_dns node-charlie alice.p2p "$ALICE_VPN"
+    [ "$status" -eq 0 ]
+
+    # Our resolver answers REFUSED for anything outside ".p2p", so a name outside that suffix
+    # must still fall through to the original nameserver this host had (Docker's embedded DNS,
+    # which resolves other containers by their compose service name) -- proving the "our server
+    # first, the original nameserver(s) after" ordering the static backend relies on actually
+    # works end to end, not just that the file has the right lines.
+    run docker compose exec -T node-alice getent ahosts node-bob
+    [ "$status" -eq 0 ]
+}
+
+@test "DNS only resolves a node's own configured peers" {
+    # node-bob only peers with node-alice, so it has no "charlie" entry in its own DNS zone --
+    # this must be NXDOMAIN, not an answer, and not just "REFUSED falls through to nothing".
+    run docker compose exec -T node-bob getent ahosts charlie.p2p
     [ "$status" -ne 0 ]
 }

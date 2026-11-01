@@ -5,6 +5,9 @@ private_key_path = "keys/alice.raw"
 bob = "18x6mrteyqw6oqga8418afrnamm3mpwftcojtre5j4crpeqzf66o"
 charlie = "u1kpy3s7ui7ao1jjf77k3fbpxb875xq1aqp1797ohrxio55f53ho"
 
+[dns]
+suffix = "p2p"
+
 [discovery]
 # Local-network-only: don't contact the n0.computer relay or the public DHT.
 n0_discovery = "NoN0"
