@@ -1,0 +1,133 @@
+# zeroconf-p2p-vpn.service — example systemd unit for the zeroconf-p2p-vpn daemon.
+#
+# Requires systemd >= 247 (for LoadCredential= and ProtectProc=; e.g. Debian 11+, Ubuntu 20.10+,
+# RHEL/Rocky 9+).
+#
+# --- Why a static user instead of DynamicUser=yes? ---
+# A DynamicUser=yes unit gets a UID that's allocated fresh on each start and has no entry in
+# /etc/passwd. That UID is not reliably usable to talk to the system D-Bus bus on a host running
+# the classic `dbus-daemon` (as opposed to `dbus-broker`): dbus-daemon tries to resolve the
+# connecting UID via NSS, which routes through `nss-systemd`'s dynamic-user lookup, which calls
+# back into systemd over D-Bus/varlink — while dbus-daemon is itself blocked waiting for that very
+# call to return. The connection then times out or is reset. This is a known, long-standing
+# incompatibility (https://github.com/systemd/systemd/issues/9503), not something fixable from the
+# client side (see `dns-host-config`, used by this daemon's optional `[dns]` config section, which
+# needs `org.freedesktop.resolve1` over the system bus). So this unit uses a static, dedicated
+# system user/group instead (`zeroconf-p2p-vpn.sysusers.conf` below creates it) — every other
+# sandboxing directive stays exactly as strict as it would be under DynamicUser=yes; the only
+# difference is the identity persists across runs instead of being freshly allocated and torn down
+# each time, which is also the upstream-recommended fix for services that must reach the system
+# bus.
+#
+# --- Install (as root) ---
+#   install -Dm644 systemd/zeroconf-p2p-vpn.sysusers.conf /etc/sysusers.d/zeroconf-p2p-vpn.conf
+#   systemd-sysusers zeroconf-p2p-vpn.conf
+#   install -Dm755 target/release/zeroconf-p2p-vpn /usr/local/sbin/zeroconf-p2p-vpn
+#   install -Dm644 systemd/zeroconf-p2p-vpn.service /etc/systemd/system/zeroconf-p2p-vpn.service
+#   systemctl daemon-reload
+#
+# If you'll use the optional [dns] config section (peer-name resolution) on a host running
+# systemd-resolved, also install the polkit rule below -- without it, dns-host-config's
+# SystemdResolved backend fails with "InteractiveAuthorizationRequired", since our unprivileged,
+# session-less service user otherwise has no standing to call resolve1's SetDNS/SetDomains:
+#   install -Dm644 systemd/zeroconf-p2p-vpn.polkit.rules /etc/polkit-1/rules.d/zeroconf-p2p-vpn.rules
+#
+# --- Bootstrap the config + key (run once, as root) ---
+#   mkdir -p /etc/zeroconf-p2p-vpn
+#   /usr/local/sbin/zeroconf-p2p-vpn generate /etc/zeroconf-p2p-vpn/config.toml
+#
+# This writes /etc/zeroconf-p2p-vpn/config.toml plus a fresh private key next to it (by default
+# named zeroconf-p2p-vpn_private.key, mode 0600 root:root — LoadCredential= below has systemd
+# itself, running as root, read the file and hand the service a copy, so the service's own user
+# never needs direct access to it). Now edit config.toml:
+#   1. Fill in your peers' public keys under [peers].
+#   2. Point private_key_path at the runtime path systemd will expose via LoadCredential= instead
+#      of the on-disk key file `generate` just created:
+#        private_key_path = "/run/credentials/zeroconf-p2p-vpn.service/private_key"
+#
+# If you rename or move the key file, update the LoadCredential= source path
+# (after the ":") to match.
+#
+# --- Enable ---
+#   systemctl enable --now zeroconf-p2p-vpn.service
+
+[Unit]
+Description=zeroconf-p2p-vpn - zero-config peer-to-peer VPN daemon
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+ExecStart=/usr/local/sbin/zeroconf-p2p-vpn /etc/zeroconf-p2p-vpn/config.toml
+
+# journald doesn't render ANSI color escapes well; the binary already respects NO_COLOR (see
+# src/main.rs).
+Environment=NO_COLOR=1
+SyslogIdentifier=zeroconf-p2p-vpn
+
+Restart=on-failure
+# Exponential backoff: 5s, 10s, 20s, ... capped at 5min. RestartSteps=/RestartMaxDelaySec= need
+# systemd >= 254; older systemd just logs "Unknown key name ..., ignoring" for the two unknown
+# keys and falls back to the fixed RestartSec= below -- harmless, no need to remove them on older
+# systemd.
+RestartSec=5s
+RestartSteps=5
+RestartMaxDelaySec=5min
+
+# --- Identity & filesystem ---
+# A static, dedicated system user/group (created by zeroconf-p2p-vpn.sysusers.conf) -- not
+# DynamicUser=yes, see the explanation at the top of this file.
+User=zeroconf-p2p-vpn
+Group=zeroconf-p2p-vpn
+ConfigurationDirectory=zeroconf-p2p-vpn
+LoadCredential=private_key:/etc/zeroconf-p2p-vpn/zeroconf-p2p-vpn_private.key
+
+# --- Capabilities: only what's needed to create the TUN device and manage its kernel routes ---
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+
+# --- Sandboxing ---
+# With DynamicUser=yes, several of these (RemoveIPC=, PrivateTmp=, NoNewPrivileges=,
+# RestrictSUIDSGID=, ProtectSystem=strict, ProtectHome=read-only) come for free. Our static user
+# (see above) doesn't get them for free, so every one of them is listed explicitly here instead --
+# this unit's sandboxing is exactly as strict either way, just spelled out rather than implied.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+UMask=0077
+
+# Keep the real /dev/ visible (PrivateDevices=yes would hide /dev/net/tun entirely, and there's no
+# guarantee it gets recreated inside a private mount), but restrict the cgroup device list to
+# exactly what's needed via the kernel's device controller. /dev/net/tun is world-read/writable
+# (0666) on stock Linux; if yours isn't, this daemon can't open it under our unprivileged service
+# user.
+DevicePolicy=closed
+DeviceAllow=/dev/net/tun rw
+
+# Only the address families the daemon actually needs: QUIC + mDNS discovery over IPv4/IPv6,
+# netlink for kernel route management (see route.rs / the net-route crate), and local sockets
+# (e.g. NSS/DNS lookups, and the system D-Bus bus used by the optional [dns] config section).
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
+
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

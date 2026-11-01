@@ -165,3 +165,16 @@ unimplemented -- see ``dns-announce``'s ``docs/design-dns-host-config.md``). On 
 without a wired-up backend, the in-process resolver still answers queries sent to it directly --
 only the automatic host-side configuration is missing, and the system resolver would need to be
 pointed at it by hand.
+
+**Running as an unprivileged systemd service:** ``org.freedesktop.resolve1``'s ``SetDNS``/
+``SetDomains`` require polkit's ``auth_admin`` by default -- i.e. root, or an interactively
+authenticated admin session -- neither of which an unattended, unprivileged service user has. The
+packaged ``systemd/zeroconf-p2p-vpn.service`` therefore ships a matching
+``systemd/zeroconf-p2p-vpn.polkit.rules`` that explicitly trusts its dedicated service account for
+exactly those two actions (the same pattern distros already use for e.g. GeoClue2 or
+NetworkManager); without installing it, the ``systemd-resolved`` backend fails with
+``InteractiveAuthorizationRequired`` and ``dns-host-config`` falls through its chain to
+``resolvconf``/a static ``/etc/resolv.conf`` edit instead. Also note that service hardening
+(``DynamicUser=yes`` in particular) can itself break the D-Bus call this backend needs in the
+first place -- see the comment at the top of ``systemd/zeroconf-p2p-vpn.service`` for why that
+unit uses a static service user instead.

@@ -1,0 +1,21 @@
+// polkit rule for zeroconf-p2p-vpn.service's optional [dns] config section.
+//
+// org.freedesktop.resolve1's SetDNS/SetDomains (called by dns-host-config's SystemdResolved
+// backend) require "auth_admin" by default -- i.e. root, or an interactively authenticated admin
+// session. zeroconf-p2p-vpn runs as its own unprivileged, session-less static system user (see
+// zeroconf-p2p-vpn.sysusers.conf), which has neither, so the call is refused with
+// InteractiveAuthorizationRequired unless this rule explicitly trusts that one user for exactly
+// these two actions. Same pattern already used on this system for other first/third-party
+// daemons that need an unattended, narrowly-scoped exception (see e.g.
+// org.freedesktop.GeoClue2.rules, org.freedesktop.NetworkManager.rules in
+// /usr/share/polkit-1/rules.d/).
+//
+// Install as /etc/polkit-1/rules.d/zeroconf-p2p-vpn.rules; polkitd picks up changes to that
+// directory automatically, no restart needed.
+polkit.addRule(function(action, subject) {
+    if ((action.id == "org.freedesktop.resolve1.set-dns-servers" ||
+         action.id == "org.freedesktop.resolve1.set-domains") &&
+        subject.user == "zeroconf-p2p-vpn") {
+        return polkit.Result.YES;
+    }
+});
