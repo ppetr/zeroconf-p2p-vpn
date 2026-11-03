@@ -68,6 +68,24 @@ Quick start
       [peers]
       alice = "ri5s1riaxztowkfasg645kdngnugembhsjwke5qfrktno9qjn8ty"
 
+   That's it -- here's the complete config file at this point, in full,
+   with the optional ``[dns]`` section added so that ``alice`` is also
+   reachable by name (see `Peer names as DNS`_ below):
+
+   .. code:: toml
+
+      [host]
+      private_key_path = "zeroconf-p2p-vpn_private.key"
+
+      [peers]
+      alice = "ri5s1riaxztowkfasg645kdngnugembhsjwke5qfrktno9qjn8ty"
+
+      [dns]
+      suffix = "p2p"
+
+   No addresses, no subnets, no ports, nothing else to configure --
+   everything else is derived automatically.
+
 4. Run it (needs ``CAP_NET_ADMIN`` to create the TUN device and manage
    routes, so typically via ``sudo`` or the systemd unit below):
 
