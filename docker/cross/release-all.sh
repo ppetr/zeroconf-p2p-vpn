@@ -7,8 +7,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 TARGETS=(
     x86_64-pc-windows-gnu
-    aarch64-unknown-linux-gnu
-    armv7-unknown-linux-gnueabihf
+    x86_64-unknown-linux-musl
+    aarch64-unknown-linux-musl
+    armv7-unknown-linux-musleabihf
 )
 
 for target in "${TARGETS[@]}"; do

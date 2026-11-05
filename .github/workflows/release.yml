@@ -4,9 +4,11 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch: {}
 
 jobs:
   check-version:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,32 +23,41 @@ jobs:
 
   build:
     needs: check-version
+    if: always() && (needs.check-version.result == 'success' || needs.check-version.result == 'skipped')
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: x86_64-pc-windows-gnu
-            cross_packages: mingw-w64
+            extra_packages: mingw-w64
             suffix: ".exe"
             archive: zip
-          - target: aarch64-unknown-linux-gnu
-            cross_packages: "gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross"
+            zigbuild: false
+          - target: x86_64-unknown-linux-musl
+            extra_packages: ""
             suffix: ""
             archive: tar.xz
-          - target: armv7-unknown-linux-gnueabihf
-            cross_packages: "gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross"
+            zigbuild: true
+          - target: aarch64-unknown-linux-musl
+            extra_packages: ""
             suffix: ""
             archive: tar.xz
+            zigbuild: true
+          - target: armv7-unknown-linux-musleabihf
+            extra_packages: ""
+            suffix: ""
+            archive: tar.xz
+            zigbuild: true
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install cross toolchain and build dependencies
+      - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ${{ matrix.cross_packages }} \
-            cmake protobuf-compiler libprotobuf-dev xz-utils
+            cmake protobuf-compiler libprotobuf-dev xz-utils zip \
+            ${{ matrix.extra_packages }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -56,8 +67,23 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      # The *-musl targets are statically linked (no GLIBC version dependency on
+      # the host running the binary, unlike the previous *-gnu cross-builds).
+      # zig cc provides the musl cross-toolchain; plain rustup+cargo build the
+      # Windows target natively via the mingw-w64 cross-gcc installed above.
+      - name: Install cargo-zigbuild and Zig
+        if: matrix.zigbuild
+        run: |
+          pip install --break-system-packages ziglang
+          cargo install cargo-zigbuild --locked
+
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: |
+          if [ "${{ matrix.zigbuild }}" = "true" ]; then
+            cargo zigbuild --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
 
       - name: Package
         run: |
@@ -80,6 +106,7 @@ jobs:
 
   release:
     needs: build
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write

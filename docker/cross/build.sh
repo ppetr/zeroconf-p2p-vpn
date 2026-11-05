@@ -4,8 +4,9 @@
 #
 # Usage: docker/cross/build.sh <target-triple>
 #   x86_64-pc-windows-gnu
-#   aarch64-unknown-linux-gnu
-#   armv7-unknown-linux-gnueabihf
+#   x86_64-unknown-linux-musl
+#   aarch64-unknown-linux-musl
+#   armv7-unknown-linux-musleabihf
 set -euo pipefail
 
 TARGET="${1:?Usage: $0 <target-triple>}"
@@ -14,8 +15,14 @@ IMAGE=rust-cross
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 case "$TARGET" in
-x86_64-pc-windows-gnu) SUFFIX=.exe ;;
-aarch64-unknown-linux-gnu | armv7-unknown-linux-gnueabihf) SUFFIX= ;;
+x86_64-pc-windows-gnu)
+    SUFFIX=.exe
+    BUILD_CMD="cargo build --release --target $TARGET"
+    ;;
+x86_64-unknown-linux-musl | aarch64-unknown-linux-musl | armv7-unknown-linux-musleabihf)
+    SUFFIX=
+    BUILD_CMD="cargo zigbuild --release --target $TARGET"
+    ;;
 *)
     echo >&2 "unknown target: $TARGET"
     exit 1
@@ -37,4 +44,4 @@ docker run --rm \
     -v "$(pwd)/dist":/dist \
     -e CARGO_PROFILE_RELEASE_LTO=thin \
     "$IMAGE" \
-    bash -c "cargo build --release --target $TARGET && cp target/$TARGET/release/$BIN$SUFFIX /dist/$BIN-$TARGET$SUFFIX"
+    bash -c "$BUILD_CMD && cp target/$TARGET/release/$BIN$SUFFIX /dist/$BIN-$TARGET$SUFFIX"
