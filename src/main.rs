@@ -65,7 +65,11 @@ async fn main() -> Result<(), anyhow::Error> {
     };
 
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+        .unwrap_or_else(|_| {
+            // iroh logs its internal relay/QUIC/portmapper machinery at INFO, which floods the
+            // journal; RUST_LOG still overrides this entirely when set.
+            tracing_subscriber::EnvFilter::new("info,iroh=warn,portmapper=warn")
+        });
     // Respect the https://no-color.org/ convention: tracing_subscriber only disables ANSI
     // output when it doesn't detect a terminal, which doesn't help on a Windows console that
     // doesn't support VT100 escape sequences.
