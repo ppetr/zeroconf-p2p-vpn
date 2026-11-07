@@ -1,3 +1,4 @@
+use anyhow::Context;
 use dns_host_config::{DnsRoute, DnsRouteConfig};
 use futures_util::future::join_all;
 use iroh::endpoint::Connection;
@@ -164,17 +165,18 @@ async fn main() -> Result<(), anyhow::Error> {
                     env!("CARGO_PKG_NAME"),
                 )
                 .await;
-                if let Err(err) = host_dns.set(&tun.if_name, &route_config).await {
-                    tracing::warn!(
-                        error = ?err,
-                        "Failed to configure the host's DNS resolver for peer names"
-                    );
-                }
+                host_dns
+                    .set(&tun.if_name, &route_config)
+                    .await
+                    .context("Failed to configure the host's DNS resolver for peer names")?;
             }
+            // `[dns]` isn't best-effort: if it's configured, peer-name resolution must actually
+            // work, not silently fall back to "the user has to set it up by hand".
             #[cfg(not(target_os = "linux"))]
-            tracing::warn!(
-                "No automatic host DNS integration exists yet for this platform; point the \
-                 system resolver at {dns_server_addr} for '{}' lookups to work",
+            anyhow::bail!(
+                "'[dns]' is configured, but there is no automatic host DNS integration for \
+                 this platform yet; remove the '[dns]' section, or point the system resolver \
+                 at {dns_server_addr} for '{}' lookups to work",
                 dns_cfg.suffix
             );
 
