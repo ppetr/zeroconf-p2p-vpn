@@ -88,10 +88,25 @@ pub fn generate(config_path: &Path) -> Result<SecretKey> {
     ensure_key(&key_path)
 }
 
+/// Polkit rule needed for the optional `[dns]` config section on a host running
+/// systemd-resolved -- see `systemd/zeroconf-p2p-vpn.service`'s install instructions. Printed
+/// here too, not just there, so it stays visible at the point someone actually sets a node up.
+const POLKIT_RULES_HINT: &str = concat!(
+    "If you enable the optional [dns] config section on a host running systemd-resolved, also \
+     install a polkit rule -- otherwise systemd-resolved refuses the unprivileged, session-less \
+     service user with \"InteractiveAuthorizationRequired\". Install whichever of the two your \
+     polkit version understands (installing both is harmless):\n\n",
+    "polkit >= 0.106, i.e. effectively every current distro -- systemd/zeroconf-p2p-vpn.polkit.rules:\n",
+    include_str!("../systemd/zeroconf-p2p-vpn.polkit.rules"),
+    "\npolkit <= 0.105, or newer with polkit-pkla-compat / polkitd-pkla installed -- systemd/zeroconf-p2p-vpn.pkla:\n",
+    include_str!("../systemd/zeroconf-p2p-vpn.pkla"),
+);
+
 /// Entry point for the `generate` subcommand: bootstraps the files and prints the public key.
 pub fn run(config_path: &str) -> Result<()> {
     let key = generate(Path::new(config_path))?;
     println!("public key: {}", key.public().to_z32());
+    println!("\n{POLKIT_RULES_HINT}");
     Ok(())
 }
 

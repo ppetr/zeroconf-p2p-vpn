@@ -27,10 +27,15 @@
 #   systemctl daemon-reload
 #
 # If you'll use the optional [dns] config section (peer-name resolution) on a host running
-# systemd-resolved, also install the polkit rule below -- without it, dns-host-config's
-# SystemdResolved backend fails with "InteractiveAuthorizationRequired", since our unprivileged,
-# session-less service user otherwise has no standing to call resolve1's SetDNS/SetDomains:
+# systemd-resolved, also install a polkit rule -- without it, dns-host-config's SystemdResolved
+# backend fails with "InteractiveAuthorizationRequired", since our unprivileged, session-less
+# service user otherwise has no standing to call resolve1's SetDNS/SetDomains. Install whichever
+# of the two your polkit version understands (installing both is harmless -- each polkit version
+# reads only the one it understands and ignores the other):
 #   install -Dm644 systemd/zeroconf-p2p-vpn.polkit.rules /etc/polkit-1/rules.d/zeroconf-p2p-vpn.rules
+#     (polkit >= 0.106, i.e. effectively every current distro)
+#   install -Dm644 systemd/zeroconf-p2p-vpn.pkla /etc/polkit-1/localauthority/50-local.d/zeroconf-p2p-vpn.pkla
+#     (polkit <= 0.105, or newer with the polkit-pkla-compat / polkitd-pkla package installed)
 #
 # --- Bootstrap the config + key (run once, as root) ---
 #   mkdir -p /etc/zeroconf-p2p-vpn

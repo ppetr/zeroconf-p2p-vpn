@@ -1,0 +1,15 @@
+# Legacy polkit "local authority" rule for zeroconf-p2p-vpn.service's optional [dns] config
+# section, equivalent to zeroconf-p2p-vpn.polkit.rules. polkit <= 0.105 has no JavaScript
+# rules.d support at all and only understands this ini-style format; polkit >= 0.106 reads it
+# only if the polkit-pkla-compat / polkitd-pkla package is installed. Installing both files is
+# safe either way: each polkit version reads only the one it understands and ignores the other.
+#
+# Install as /etc/polkit-1/localauthority/50-local.d/zeroconf-p2p-vpn.pkla; polkitd re-reads
+# this directory automatically, no restart needed.
+
+[Allow zeroconf-p2p-vpn to manage systemd-resolved without interactive authentication]
+Identity=unix-user:zeroconf-p2p-vpn
+Action=org.freedesktop.resolve1.set-dns-servers;org.freedesktop.resolve1.set-domains
+ResultAny=yes
+ResultInactive=yes
+ResultActive=yes
