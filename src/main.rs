@@ -40,11 +40,14 @@ fn icmp_reply(
     gateway.generate_reply(&mut buf, packet, icmp_type).ok().map(|_| tun::TxPacket::new(buf.into()))
 }
 
-fn get_metrics_addr() -> std::net::SocketAddr {
-    let port: u16 = env::var("METRICS_PORT")
-        .map(|p| p.parse().expect("METRICS_PORT must be a valid u16 number"))
-        .unwrap_or_else(|_| 9189);
-    std::net::SocketAddr::new(std::net::Ipv6Addr::UNSPECIFIED.into(), port)
+fn get_metrics_addr() -> anyhow::Result<std::net::SocketAddr> {
+    let port: u16 = match env::var("METRICS_PORT") {
+        Ok(p) => p
+            .parse()
+            .with_context(|| format!("METRICS_PORT must be a valid u16 number, got {p:?}"))?,
+        Err(_) => 9189,
+    };
+    Ok(std::net::SocketAddr::new(std::net::Ipv6Addr::UNSPECIFIED.into(), port))
 }
 
 #[tokio::main]
@@ -88,10 +91,11 @@ async fn main() -> Result<(), anyhow::Error> {
         "Logging level is {:?}; change the RUST_LOG environment variable to set a different level",
         LevelFilter::current()
     );
+    let metrics_addr = get_metrics_addr()?;
     metrics_exporter_prometheus::PrometheusBuilder::new()
-        .with_http_listener(get_metrics_addr())
+        .with_http_listener(metrics_addr)
         .install()
-        .expect("failed to install Prometheus metrics recorder/exporter");
+        .with_context(|| format!("failed to install Prometheus exporter on {metrics_addr}"))?;
 
     info!("Setting up a node");
     let config = config::Config::load(config_path)?;
