@@ -60,8 +60,12 @@
 Description=zeroconf-p2p-vpn - zero-config peer-to-peer VPN daemon
 After=network-online.target
 Wants=network-online.target
-StartLimitIntervalSec=300
-StartLimitBurst=5
+# No start-rate limit (0 disables it): a persistent misconfiguration (e.g. a missing polkit rule
+# for the optional `[dns]` section, which main.rs treats as a fatal startup error) would otherwise
+# exhaust a StartLimitBurst/StartLimitIntervalSec within the exponential backoff below, parking the
+# unit in failed(start-limit-hit) -- requiring a manual `systemctl reset-failed` even after the
+# root cause is fixed. The backoff's own RestartMaxDelaySec already caps how often we retry.
+StartLimitIntervalSec=0
 
 [Service]
 Type=exec
@@ -73,10 +77,10 @@ Environment=NO_COLOR=1
 SyslogIdentifier=zeroconf-p2p-vpn
 
 Restart=on-failure
-# Exponential backoff: 5s, 10s, 20s, ... capped at 5min. RestartSteps=/RestartMaxDelaySec= need
-# systemd >= 254; older systemd just logs "Unknown key name ..., ignoring" for the two unknown
-# keys and falls back to the fixed RestartSec= below -- harmless, no need to remove them on older
-# systemd.
+# Exponential backoff: 5s, 10s, 20s, ... capped at 5min, retried forever (see StartLimitIntervalSec=
+# above). RestartSteps=/RestartMaxDelaySec= need systemd >= 254; older systemd just logs "Unknown
+# key name ..., ignoring" for the two unknown keys and falls back to the fixed RestartSec= below --
+# harmless, no need to remove them on older systemd.
 RestartSec=5s
 RestartSteps=5
 RestartMaxDelaySec=5min
