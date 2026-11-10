@@ -78,8 +78,10 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         // iroh logs its internal relay/QUIC/portmapper machinery at INFO, which floods the
-        // journal; RUST_LOG still overrides this entirely when set.
-        tracing_subscriber::EnvFilter::new("info,iroh=warn,portmapper=warn")
+        // journal; RUST_LOG still overrides this entirely when set. `iroh::net_report` is
+        // limited to errors because its WARN-level spans each emit a close event (see
+        // `with_span_events` below) on every periodic probe round.
+        tracing_subscriber::EnvFilter::new("info,iroh=warn,iroh::net_report=error,portmapper=warn")
     });
     // Respect the https://no-color.org/ convention: tracing_subscriber only disables ANSI
     // output when it doesn't detect a terminal, which doesn't help on a Windows console that
