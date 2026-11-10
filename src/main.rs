@@ -20,6 +20,7 @@ mod build_info;
 mod config;
 mod connection;
 mod dns;
+mod endpoint_metrics;
 mod error;
 mod generate;
 mod osal;
@@ -194,6 +195,11 @@ async fn main() -> Result<(), anyhow::Error> {
     };
 
     let root_cancel = CancellationToken::new();
+    endpoint_metrics::spawn_exporter(
+        endpoint.clone(),
+        std::time::Duration::from_secs(5),
+        root_cancel.child_token(),
+    );
     let relay: Arc<relay::Relay<peer::ConnectedPeer>> =
         Arc::new(relay::Relay::new(net_route_handle.clone()));
     let mut incoming_router = connection::IncomingRouter::new();

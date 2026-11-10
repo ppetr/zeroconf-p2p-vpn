@@ -10,6 +10,9 @@ pub struct QuinnMetrics {
     pub datagram_rx: Gauge,
     pub rtt: Gauge,
     pub relayed: Gauge,
+    pub paths_ip: Gauge,
+    pub paths_relay: Gauge,
+    pub client_side: Gauge,
     pub cwnd: Gauge,
     pub congestion_events: Gauge,
     pub lost_packets: Gauge,
@@ -45,6 +48,23 @@ impl QuinnMetrics {
             relayed: gauge!(
                 description: "Whether the connection's currently selected path is relayed (1) or direct (0)",
                 "p2p_vpn_peer_quinn_relayed",
+                labels.clone(),
+            ),
+            paths_ip: gauge!(
+                description: "Number of open direct (IP) paths of the connection",
+                unit: Unit::Count,
+                "p2p_vpn_peer_quinn_paths_ip",
+                labels.clone(),
+            ),
+            paths_relay: gauge!(
+                description: "Number of open relay paths of the connection",
+                unit: Unit::Count,
+                "p2p_vpn_peer_quinn_paths_relay",
+                labels.clone(),
+            ),
+            client_side: gauge!(
+                description: "Whether this side is the QUIC client of the connection (1) or the server (0); only the client holepunches",
+                "p2p_vpn_peer_quinn_client_side",
                 labels.clone(),
             ),
             cwnd: gauge!(
@@ -118,7 +138,11 @@ impl QuinnMetrics {
                     break;
                 }
                 self.update_connection(&connection.stats());
-                if let Some(path) = connection.paths().into_iter().find(|path| path.is_selected()) {
+                self.client_side.set(connection.side().is_client() as u8 as f64);
+                let paths = connection.paths().into_iter().collect::<Vec<_>>();
+                self.paths_ip.set(paths.iter().filter(|path| path.is_ip()).count() as f64);
+                self.paths_relay.set(paths.iter().filter(|path| path.is_relay()).count() as f64);
+                if let Some(path) = paths.iter().find(|path| path.is_selected()) {
                     self.relayed.set(if path.is_relay() { 1.0 } else { 0.0 });
                     if let Some(stats) = path.stats() {
                         self.update_path(&stats);

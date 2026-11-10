@@ -5504,6 +5504,7 @@ dependencies = [
  "futures-util",
  "ipnet",
  "iroh",
+ "iroh-metrics",
  "iroh-persistent",
  "libc",
  "metrics",
