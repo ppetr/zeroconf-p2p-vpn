@@ -211,6 +211,12 @@ async fn main() -> Result<(), anyhow::Error> {
                 // (`thin_status::ErrorCode::Aborted`). Nothing currently parses it back on either
                 // side; kept only for continuity/debuggability on the wire.
                 .close_code(10u32)
+                // Caps the wait between redials of a peer that stays unreachable.
+                .backoff(backoff::ExponentialBackoff {
+                    max_interval: std::time::Duration::from_secs(60),
+                    max_elapsed_time: None,
+                    ..Default::default()
+                })
                 .cancellation(root_cancel.child_token())
                 .spawn()
         });
