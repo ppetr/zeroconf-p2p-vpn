@@ -140,8 +140,12 @@ impl QuinnMetrics {
                 self.update_connection(&connection.stats());
                 self.client_side.set(connection.side().is_client() as u8 as f64);
                 let paths = connection.paths().into_iter().collect::<Vec<_>>();
-                self.paths_ip.set(paths.iter().filter(|path| path.is_ip()).count() as f64);
-                self.paths_relay.set(paths.iter().filter(|path| path.is_relay()).count() as f64);
+                self.paths_ip
+                    .set(paths.iter().filter(|path| path.is_ip() && !path.is_closed()).count()
+                        as f64);
+                self.paths_relay
+                    .set(paths.iter().filter(|path| path.is_relay() && !path.is_closed()).count()
+                        as f64);
                 if let Some(path) = paths.iter().find(|path| path.is_selected()) {
                     self.relayed.set(if path.is_relay() { 1.0 } else { 0.0 });
                     if let Some(stats) = path.stats() {
