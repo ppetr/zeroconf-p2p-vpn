@@ -17,6 +17,10 @@ pub trait RoutingTable: Clone + Send + Sync + std::fmt::Debug + 'static {
     ) -> impl std::future::Future<Output = Result<(), std::io::Error>> + Send;
 }
 
+/// The metric the Linux kernel assigns to IPv6 routes added without an explicit one.
+#[cfg(target_os = "linux")]
+const LINUX_DEFAULT_METRIC: u32 = 1024;
+
 #[derive(Clone)]
 pub struct NetRouteHandle {
     pub handle: Arc<net_route::Handle>,
@@ -68,7 +72,12 @@ impl NetRouteHandle {
             IpAddr::V4(_) => 32,
             IpAddr::V6(_) => 128,
         };
-        net_route::Route::new(dest_ip, prefix).with_ifindex(self.if_index)
+        let route = net_route::Route::new(dest_ip, prefix).with_ifindex(self.if_index);
+        // `net_route` on Linux deletes only a route whose metric equals the requested one, and
+        // the kernel stores unset metrics as `LINUX_DEFAULT_METRIC`, so it must be explicit.
+        #[cfg(target_os = "linux")]
+        let route = route.with_metric(LINUX_DEFAULT_METRIC);
+        route
     }
 }
 
