@@ -16,6 +16,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 
 mod addr;
 mod buffer_pool;
+mod build_info;
 mod config;
 mod connection;
 mod dns;
@@ -55,6 +56,10 @@ async fn main() -> Result<(), anyhow::Error> {
     let args: Vec<String> = std::env::args().collect();
     let argv: Vec<&str> = args.iter().map(String::as_str).collect();
     let config_path = match argv.as_slice() {
+        [_argv0, "--version" | "-V"] => {
+            println!("zeroconf-p2p-vpn {} [{}]", build_info::summary(), build_info::GIT_REV);
+            return Ok(());
+        }
         [_argv0, "show", config_path] => return show::run(config_path),
         [_argv0, "generate", config_path] => return generate::run(config_path),
         [_argv0, config_path] => *config_path,
@@ -96,6 +101,8 @@ async fn main() -> Result<(), anyhow::Error> {
         .with_http_listener(metrics_addr)
         .install()
         .with_context(|| format!("failed to install Prometheus exporter on {metrics_addr}"))?;
+    build_info::register_metrics();
+    info!("zeroconf-p2p-vpn {} [{}]", build_info::summary(), build_info::GIT_REV);
 
     info!("Setting up a node");
     let config = config::Config::load(config_path)?;

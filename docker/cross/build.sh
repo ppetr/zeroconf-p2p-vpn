@@ -42,6 +42,11 @@ for rel in $(grep -oP 'path = "\K\.\./[^"]+' Cargo.toml || true); do
     DEP_MOUNTS+=(-v "$(cd "$rel" && pwd):/${rel#../}:ro")
 done
 
+# Git info is resolved on the host: the container has no usable .git view (ownership, jj).
+# build.rs picks these up as build info; see ZEROCONF_GIT_* there.
+GIT_REV="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+GIT_DESCRIBE="$(git describe --tags --always --long --dirty=-modified 2>/dev/null || echo unknown)"
+
 # Fat LTO's final link needs more RAM than this host reliably has free; thin LTO
 # only applies to these cross builds, not the native release profile in Cargo.toml.
 docker run --rm \
@@ -55,5 +60,7 @@ docker run --rm \
     -v "$(pwd)/dist":/dist \
     ${DEP_MOUNTS[@]+"${DEP_MOUNTS[@]}"} \
     -e CARGO_PROFILE_RELEASE_LTO=thin \
+    -e ZEROCONF_GIT_REV="$GIT_REV" \
+    -e ZEROCONF_GIT_DESCRIBE="$GIT_DESCRIBE" \
     "$IMAGE" \
     bash -c "$BUILD_CMD && cp target/$TARGET/release/$BIN$SUFFIX /dist/$BIN-$TARGET$SUFFIX"
