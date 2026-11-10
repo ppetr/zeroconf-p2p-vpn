@@ -189,7 +189,6 @@ async fn main() -> Result<(), anyhow::Error> {
         _ => None,
     };
 
-    // TODO: Cancellation.
     let root_cancel = CancellationToken::new();
     let relay: Arc<relay::Relay<peer::ConnectedPeer>> =
         Arc::new(relay::Relay::new(net_route_handle.clone()));
@@ -298,6 +297,42 @@ async fn main() -> Result<(), anyhow::Error> {
         }
     };
 
-    let _ = tokio::join!(tun_loop, sessions_loop, tun_rx_loop);
+    tokio::select! {
+        _ = async { tokio::join!(tun_loop, sessions_loop, tun_rx_loop) } => {}
+        () = shutdown_signal() => info!("Shutdown requested, closing connections"),
+    }
+    // Dropping the loops above (at the end of `select!`) releases their resources; cancelling
+    // lets the per-peer actors close their connections.
+    root_cancel.cancel();
+    // `ScopedRoute`s must be removed explicitly; dropping them panics.
+    relay.clear().await;
+    // Closes the endpoint and tells all peers (CONNECTION_CLOSE) so they free their connection
+    // slots immediately instead of waiting for the idle timeout.
+    if tokio::time::timeout(ENDPOINT_CLOSE_TIMEOUT, node.close()).await.is_err() {
+        tracing::warn!("Closing the endpoint timed out");
+    }
     Ok(())
+}
+
+/// Upper bound for waiting on peers to acknowledge the closing of the endpoint.
+const ENDPOINT_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Completes on the first termination request: Ctrl-C, or SIGTERM on Unix.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut sigterm) => tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = sigterm.recv() => {}
+            },
+            Err(err) => {
+                tracing::warn!(%err, "Cannot install the SIGTERM handler");
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = tokio::signal::ctrl_c().await;
 }

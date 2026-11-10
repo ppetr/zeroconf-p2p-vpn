@@ -140,6 +140,13 @@ impl<T: Clone + Debug + Send + Sync + 'static, R: RoutingTable> Relay<T, R> {
         self.remove_locked(&self.handle.lock().await, dest_ips).await
     }
 
+    /// Removes all entries and their routes. Must be called before the relay is dropped, since
+    /// dropping a still-installed `ScopedRoute` panics.
+    pub async fn clear(&self) {
+        let ips: Vec<IpAddr> = self.peer_map.iter().map(|e| *e.key()).collect();
+        self.remove(&ips).await;
+    }
+
     async fn remove_locked(&self, locked: &MutexGuard<'_, R>, dest_ips: &[IpAddr]) {
         let _ = join_all(dest_ips.iter().map(|ip| async move {
             // Prefer removing via the tracked `ScopedRoute` if we have one: it's the same route
@@ -268,6 +275,21 @@ mod tests {
         assert_eq!(relay.get(&ip3), connected(42));
 
         relay.remove(&ips).await;
+    }
+
+    #[tokio::test]
+    async fn clear_removes_connected_and_parked_entries() {
+        let mock_handle = MockRouteHandle::new();
+        let relay = Relay::new(mock_handle.clone());
+        let (ip1, ip2) = (ip4(10, 0, 0, 1), ip4(10, 0, 0, 2));
+
+        relay.insert(&[ip1, ip2], "peer".to_string()).await.unwrap();
+        relay.park(&[ip2]);
+        relay.clear().await;
+
+        assert!(!mock_handle.has_route(&ip1) && !mock_handle.has_route(&ip2));
+        assert_eq!(relay.get(&ip1), None);
+        assert_eq!(relay.get(&ip2), None);
     }
 
     #[tokio::test]
