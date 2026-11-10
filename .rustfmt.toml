@@ -12,8 +12,6 @@ style_edition = "2021"
 # Line endings will be converted to \n.
 newline_style = "Unix"
 
-wrap_comments = true
-
 # The "Default" setting has a heuristic which splits lines too aggresively.
 # We are willing to revisit this setting in future versions of rustfmt.
 # Bugs:

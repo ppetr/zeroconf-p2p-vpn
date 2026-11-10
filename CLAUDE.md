@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Format: `cargo fmt` (config in `.rustfmt.toml`; don't pass `-- --edition=...`, cargo already does). The "can't set `wrap_comments`" warning on stable is expected. Check with `cargo fmt --check`; run it before every commit so formatting never needs a separate cleanup.
 - Cross-compiled release binaries (Docker, into `dist/`): `docker/cross/build.sh <target-triple>` or `docker/cross/release-all.sh`, run from the repo root.
 - Version control is `jj` colocated with git (`.jj` and `.git` both present); finish work with `jj new`.
+- `jj fix` runs `rustfmt` on `*.rs` files (configured per-repo in the user's jj config, not checked in). Always use `jj fix -s @`; plain `jj fix` rewrites every mutable commit and moves formatting changes between them.
 - Run all tests: `cargo test`
 - Run a single test: `cargo test <test_name>` (e.g. `cargo test test_insert_and_get_single_ip`)
 - Run tests in one module: `cargo test relay::tests::`
