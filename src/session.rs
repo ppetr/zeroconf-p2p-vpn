@@ -14,14 +14,16 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use iroh::endpoint::Connection;
+use iroh::endpoint::{Connection, Endpoint};
 use iroh_persistent::PersistentConnection;
 use metrics::{counter, IntoLabels};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, info_span, warn, Instrument};
 
 use crate::dns::PeerNames;
 use crate::error::ExtractedErrorCode;
+use crate::path_diagnostics;
 use crate::peer::{self, CommonPeerConfig, ConnectedPeer};
 use crate::proto;
 use crate::relay::Relay;
@@ -38,6 +40,8 @@ pub struct PeerSessionConfig {
     /// DNS peer-name registry to keep in sync with this peer's negotiated addresses, if DNS
     /// resolution (`[dns]` in the config) is enabled.
     pub dns_names: Option<Arc<PeerNames>>,
+    /// The endpoint the peer's connections belong to; only used to diagnose their paths.
+    pub endpoint: Endpoint,
 }
 
 /// Drives a single peer: reconnect loop, handshake, route registration, receive loop.
@@ -107,9 +111,17 @@ impl PeerSession {
         routes: &mut Vec<IpAddr>,
     ) {
         info!(peer = %self.config.name, remote_addr, "Connected, starting the communication loop");
+        let cancel = CancellationToken::new();
+        let _stop_diagnostics = cancel.clone().drop_guard();
+        path_diagnostics::spawn_change_logger(
+            self.config.endpoint.clone(),
+            conn.clone(),
+            self.config.name.clone(),
+            cancel,
+        );
         let peer_config = peer::PeerConfig {
             common: self.config.common.clone(),
-            conn,
+            conn: conn.clone(),
             advertise: self.config.advertise.clone(),
         };
 
@@ -122,6 +134,7 @@ impl PeerSession {
                     &err,
                 );
                 warn!(peer = %self.config.name, error = ?err, "Handshake failed");
+                self.log_path_snapshot(&conn, "handshake failed").await;
                 return;
             }
         };
@@ -151,11 +164,17 @@ impl PeerSession {
                 &err,
             );
             warn!(peer = %self.config.name, error = ?err, "Receive loop ended with an error");
+            self.log_path_snapshot(&conn, "receive loop failed").await;
         }
 
         // The connection dropped: park its routes (keep them installed, marked offline) and
         // wait for the link to reconnect.
         self.park_routes(routes);
+    }
+
+    async fn log_path_snapshot(&self, conn: &Connection, reason: &str) {
+        path_diagnostics::log_snapshot(&self.config.endpoint, conn, &self.config.name, reason)
+            .await;
     }
 
     /// Fully withdraws the peer's routes from the relay (kernel route included). Used only when

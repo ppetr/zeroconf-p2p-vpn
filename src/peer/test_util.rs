@@ -32,6 +32,10 @@ pub struct Node {
 }
 
 impl Node {
+    pub fn endpoint(&self) -> &Endpoint {
+        &self.endpoint
+    }
+
     /// Closes the underlying `Endpoint`. Dropping a `Node` without calling this first still
     /// works, but logs a noisy `ERROR` since `iroh` expects an explicit close for a graceful
     /// shutdown.

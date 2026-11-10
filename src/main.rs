@@ -24,6 +24,8 @@ mod endpoint_metrics;
 mod error;
 mod generate;
 mod osal;
+mod path_diagnostics;
+mod path_monitor;
 mod peer;
 mod proto;
 mod relay;
@@ -244,6 +246,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 common: common_config.clone(),
                 advertise: advertise.clone(),
                 dns_names: dns_names.clone(),
+                endpoint: endpoint.clone(),
             },
             handle,
             relay.clone(),
