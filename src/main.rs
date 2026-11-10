@@ -1,10 +1,10 @@
+use crate::route::RoutingTable;
 use anyhow::Context;
 use dns_host_config::{DnsRoute, DnsRouteConfig};
 use futures_util::future::join_all;
 use iroh::endpoint::Connection;
 use iroh_persistent::PersistentConnection;
 use metrics::IntoLabels;
-use crate::route::RoutingTable;
 use secure_p2p_transport::{load_key_from_disk, TransportNode};
 use std::env;
 use std::net::{IpAddr, Ipv6Addr};
@@ -73,12 +73,11 @@ async fn main() -> Result<(), anyhow::Error> {
         }
     };
 
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| {
-            // iroh logs its internal relay/QUIC/portmapper machinery at INFO, which floods the
-            // journal; RUST_LOG still overrides this entirely when set.
-            tracing_subscriber::EnvFilter::new("info,iroh=warn,portmapper=warn")
-        });
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        // iroh logs its internal relay/QUIC/portmapper machinery at INFO, which floods the
+        // journal; RUST_LOG still overrides this entirely when set.
+        tracing_subscriber::EnvFilter::new("info,iroh=warn,portmapper=warn")
+    });
     // Respect the https://no-color.org/ convention: tracing_subscriber only disables ANSI
     // output when it doesn't detect a terminal, which doesn't help on a Windows console that
     // doesn't support VT100 escape sequences.
@@ -172,10 +171,8 @@ async fn main() -> Result<(), anyhow::Error> {
                     vec![IpAddr::V6(dns_server_addr)],
                     vec![dns_cfg.suffix.clone()],
                 )?;
-                let mut host_dns = dns_host_config::linux::LinuxDnsRoute::probe(
-                    env!("CARGO_PKG_NAME"),
-                )
-                .await;
+                let mut host_dns =
+                    dns_host_config::linux::LinuxDnsRoute::probe(env!("CARGO_PKG_NAME")).await;
                 host_dns
                     .set(&tun.if_name, &route_config)
                     .await
@@ -262,9 +259,12 @@ async fn main() -> Result<(), anyhow::Error> {
             }
             if let Some((dns_cfg, resolver)) = &dns_dispatch {
                 if dest_ip == Some(IpAddr::V6(dns_cfg.server_addr)) {
-                    if let Some(reply) =
-                        dns_stack::dns::handle_packet(dns_cfg, resolver.as_ref(), packet.data.as_ref())
-                            .await
+                    if let Some(reply) = dns_stack::dns::handle_packet(
+                        dns_cfg,
+                        resolver.as_ref(),
+                        packet.data.as_ref(),
+                    )
+                    .await
                     {
                         if let Err(err) = tx_handle.try_send(tun::TxPacket::new(reply.into())) {
                             tracing::debug!(err = ?err, "Error sending DNS reply");

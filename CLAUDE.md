@@ -5,7 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 - Build: `cargo build` (release: `cargo build --release`)
-- Format: `cargo fmt -- --edition=2021`
+- Format: `cargo fmt` (config in `.rustfmt.toml`; don't pass `-- --edition=...`, cargo already does). The "can't set `wrap_comments`" warning on stable is expected. Check with `cargo fmt --check`; run it before every commit so formatting never needs a separate cleanup.
+- Cross-compiled release binaries (Docker, into `dist/`): `docker/cross/build.sh <target-triple>` or `docker/cross/release-all.sh`, run from the repo root.
+- Version control is `jj` colocated with git (`.jj` and `.git` both present); finish work with `jj new`.
 - Run all tests: `cargo test`
 - Run a single test: `cargo test <test_name>` (e.g. `cargo test test_insert_and_get_single_ip`)
 - Run tests in one module: `cargo test relay::tests::`
@@ -40,6 +42,8 @@ Key modules:
 - **`proto.rs`** — the control-plane protocol: `ControlRequest`/`ControlResponse` messages (defined in `proto/p2p_vpn/control/v1/control.proto`, compiled by `build.rs` via `prost-build`) exchanged over a QUIC bidirectional stream, currently used for the `Advertise` handshake.
 - **`error.rs`** — `ExtractedErrorCode` normalizes `std::io::Error` / `anyhow::Error` / `thin_status::ThinStatus` into consistent Prometheus metric label pairs (`ERROR_CODE`/`ERROR_KIND`); also has loop/task shutdown helpers that treat `Cancelled` as a non-error.
 - **`osal/`** — OS abstraction layer; currently just Linux/libc errno classification for retryable TUN I/O errors.
+
+Build info: `build.rs` embeds the git revision and `git describe` output (`-modified` suffix = dirty tree); `build_info.rs` exposes them via the `p2p_vpn_build_info` metric, the startup log line and `--version`. Builds without a usable `.git` (e.g. in Docker) pass `ZEROCONF_GIT_REV` / `ZEROCONF_GIT_DESCRIBE` instead; `docker/cross/build.sh` does this.
 
 Observability: `tracing` (`RUST_LOG` env var) for logs, `metrics` + `metrics-exporter-prometheus` for a Prometheus endpoint. Most modules record both.
 

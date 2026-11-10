@@ -3,8 +3,8 @@
 
 # Inspired by Google's open-source projects' formatting configuration.
 
-# Rust language edition to be used by the parser.
-edition = "2024"
+# Rust language edition to be used by the parser (keep in sync with Cargo.toml).
+edition = "2021"
 
 # Version of the formatting rules to use.
 style_edition = "2021"
