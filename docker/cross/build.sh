@@ -32,6 +32,16 @@ esac
 docker build -t "$IMAGE" "$SCRIPT_DIR"
 mkdir -p dist
 
+# Docker creates named volumes root-owned; hand the target volume to the host user the build runs as.
+docker run --rm -v "build-target-$TARGET":/t "$IMAGE" chown "$(id -u):$(id -g)" /t
+
+# Mount sibling path dependencies (`path = "../x"` in Cargo.toml) where cargo resolves them from
+# inside the container: /src/../x == /x.
+DEP_MOUNTS=()
+for rel in $(grep -oP 'path = "\K\.\./[^"]+' Cargo.toml || true); do
+    DEP_MOUNTS+=(-v "$(cd "$rel" && pwd):/${rel#../}:ro")
+done
+
 # Fat LTO's final link needs more RAM than this host reliably has free; thin LTO
 # only applies to these cross builds, not the native release profile in Cargo.toml.
 docker run --rm \
@@ -40,8 +50,10 @@ docker run --rm \
     -w /src \
     -v cargo-registry:/usr/local/cargo/registry \
     -v cargo-git:/usr/local/cargo/git \
+    -v zig-cache:/cache \
     -v "build-target-$TARGET":/src/target \
     -v "$(pwd)/dist":/dist \
+    ${DEP_MOUNTS[@]+"${DEP_MOUNTS[@]}"} \
     -e CARGO_PROFILE_RELEASE_LTO=thin \
     "$IMAGE" \
     bash -c "$BUILD_CMD && cp target/$TARGET/release/$BIN$SUFFIX /dist/$BIN-$TARGET$SUFFIX"

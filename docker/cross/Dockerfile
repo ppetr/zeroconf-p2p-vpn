@@ -22,3 +22,8 @@ RUN rustup target add \
     x86_64-unknown-linux-musl \
     aarch64-unknown-linux-musl \
     armv7-unknown-linux-musleabihf
+
+# World-writable cache dir for cargo-zigbuild/zig; build.sh runs the container as the host user,
+# who has no home directory here, and mounts a named volume over this path (inheriting its mode).
+RUN mkdir -m 1777 /cache
+ENV XDG_CACHE_HOME=/cache
