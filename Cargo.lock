@@ -2041,9 +2041,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-persistent"
-version = "0.1.2"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08997556860cec1a204bfb69c726876dfdba477e22c1eff9efd4ca68f600dc40"
+checksum = "f9f747ec6e116dbb30be6584e04a84d4a92d6de1e61743fb663516a517f8efd0"
 dependencies = [
  "backoff",
  "futures-core",

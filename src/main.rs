@@ -1,9 +1,10 @@
 use crate::route::RoutingTable;
 use anyhow::Context;
 use dns_host_config::{DnsRoute, DnsRouteConfig};
-use futures_util::future::join_all;
+use futures_util::future::FusedFuture;
+use futures_util::future::{join_all, FutureExt};
 use iroh::endpoint::Connection;
-use iroh_persistent::PersistentConnection;
+use iroh_persistent::Builder;
 use metrics::IntoLabels;
 use secure_p2p_transport::{load_key_from_disk, TransportNode};
 use std::env;
@@ -11,7 +12,7 @@ use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, info_span, level_filters::LevelFilter};
+use tracing::{info, level_filters::LevelFilter};
 use tracing_subscriber::fmt::format::FmtSpan;
 
 mod addr;
@@ -212,28 +213,22 @@ async fn main() -> Result<(), anyhow::Error> {
         info!("Configuring peer '{}': '{}'", name, peer_key.to_z32());
         let (incoming_tx, incoming_rx) = mpsc::channel::<Connection>(4);
         incoming_router.register(*peer_key, incoming_tx);
-        // `PersistentConnection` propagates this span into its spawned tasks, so their logs
-        // (e.g. "preferred direction: ...") can be attributed to this peer instead of being
-        // ambiguous whenever more than one peer is configured.
-        let link = info_span!("peer_link", peer = name.as_str()).in_scope(|| {
-            PersistentConnection::builder(endpoint.clone(), *peer_key, alpn.clone())
-                .incoming(futures_util::stream::unfold(incoming_rx, |mut rx| async move {
-                    rx.recv().await.map(|conn| (conn, rx))
-                }))
-                // Matches the QUIC close code this project used to send for this kind of internal
-                // housekeeping close before switching to `iroh_persistent`
-                // (`thin_status::ErrorCode::Aborted`). Nothing currently parses it back on either
-                // side; kept only for continuity/debuggability on the wire.
-                .close_code(10u32)
-                // Caps the wait between redials of a peer that stays unreachable.
-                .backoff(backoff::ExponentialBackoff {
-                    max_interval: std::time::Duration::from_secs(60),
-                    max_elapsed_time: None,
-                    ..Default::default()
-                })
-                .cancellation(root_cancel.child_token())
-                .spawn()
-        });
+        let link = Builder::new(endpoint.clone(), *peer_key, alpn.clone())
+            .incoming(futures_util::stream::unfold(incoming_rx, |mut rx| async move {
+                rx.recv().await.map(|conn| (conn, rx))
+            }))
+            // Matches the QUIC close code this project used to send for this kind of internal
+            // housekeeping close before switching to `iroh_persistent`
+            // (`thin_status::ErrorCode::Aborted`). Nothing currently parses it back on either
+            // side; kept only for continuity/debuggability on the wire.
+            .close_code(10u32)
+            // Caps the wait between redials of a peer that stays unreachable.
+            .backoff(backoff::ExponentialBackoff {
+                max_interval: std::time::Duration::from_secs(60),
+                max_elapsed_time: None,
+                ..Default::default()
+            })
+            .cancellation(root_cancel.child_token());
         links.push((name.clone(), link));
     }
 
@@ -321,14 +316,21 @@ async fn main() -> Result<(), anyhow::Error> {
         }
     };
 
+    let mut sessions_loop = std::pin::pin!(sessions_loop.fuse());
     tokio::select! {
-        _ = async { tokio::join!(tun_loop, sessions_loop, tun_rx_loop) } => {}
+        _ = async { tokio::join!(tun_loop, sessions_loop.as_mut(), tun_rx_loop) } => {}
         () = shutdown_signal() => info!("Shutdown requested, closing connections"),
     }
-    // Dropping the loops above (at the end of `select!`) releases their resources; cancelling
-    // lets the per-peer actors close their connections.
+    // Cancelling makes the per-peer links close their connections and end; each session then
+    // withdraws its routes. Dropping the sessions instead would leave that to `relay.clear()`.
     root_cancel.cancel();
-    // `ScopedRoute`s must be removed explicitly; dropping them panics.
+    if !sessions_loop.is_terminated()
+        && tokio::time::timeout(SESSIONS_STOP_TIMEOUT, sessions_loop).await.is_err()
+    {
+        tracing::warn!("Stopping the peer sessions timed out");
+    }
+    // Removes what the sessions did not. `ScopedRoute`s must be removed explicitly; dropping them
+    // panics.
     relay.clear().await;
     // Closes the endpoint and tells all peers (CONNECTION_CLOSE) so they free their connection
     // slots immediately instead of waiting for the idle timeout.
@@ -337,6 +339,9 @@ async fn main() -> Result<(), anyhow::Error> {
     }
     Ok(())
 }
+
+/// Upper bound for waiting on the peer sessions to withdraw their routes.
+const SESSIONS_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Upper bound for waiting on peers to acknowledge the closing of the endpoint.
 const ENDPOINT_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);

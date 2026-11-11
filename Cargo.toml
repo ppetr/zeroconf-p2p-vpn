@@ -19,7 +19,7 @@ futures-util = "0.3.31"
 ipnet = "2.12.0"
 iroh = "0.98.2"
 iroh-metrics = "0.38"
-iroh-persistent = "0.1.2"
+iroh-persistent = "0.2.0"
 libc = "0.2.186"
 metrics = "0.24"
 metrics-exporter-prometheus = { version = ">= 0.17.0", features = ["protobuf"] }
