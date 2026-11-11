@@ -7,8 +7,9 @@
 //! host-unreachable) while the link reconnects. Routes are only fully withdrawn when the link ends.
 //!
 //! The handler reports to the link whether the connection was worth keeping (`Outcome`), which
-//! drives the link's redial backoff: a connection that fails its setup, or dies right after it,
-//! keeps the backoff growing.
+//! drives the link's redial backoff: a connection that fails its setup, is cancelled before the
+//! setup finishes (the link cancels a connection the peer closed), or dies right after it, keeps
+//! the backoff growing.
 //!
 //! A failure in a connection (handshake, relay insert, receive loop) is logged and counted and the
 //! link keeps going, so one misbehaving peer can't take down the process.
@@ -148,7 +149,8 @@ impl SessionHandler {
 
         let handshake = tokio::select! {
             result = peer::Peer::new(peer_config).handshake() => result,
-            _ = cancel.cancelled() => return Outcome::Done,
+            // `cancel` also fires when the peer closes the connection, so this is no success.
+            _ = cancel.cancelled() => return Outcome::Failed,
         };
         let (mut connected, changed) = match handshake {
             Ok(result) => result,
@@ -183,9 +185,11 @@ impl SessionHandler {
         }
 
         let established = Instant::now();
+        // A cancellation (the peer closed the connection, it was replaced, or shutdown) ends the
+        // loop like a dropped connection does; the connection's age then decides the outcome.
         let received = tokio::select! {
             result = connected.recv_loop(self.tx_packet.clone()) => result,
-            _ = cancel.cancelled() => return Outcome::Done,
+            _ = cancel.cancelled() => Ok(()),
         };
         if let Err(err) = received {
             self.count_error(
