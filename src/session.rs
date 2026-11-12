@@ -11,6 +11,11 @@
 //! setup finishes (the link cancels a connection the peer closed), or dies right after it, keeps
 //! the backoff growing.
 //!
+//! A connection whose selected path stays relayed (it started direct: the handshake waits for it)
+//! is ended deliberately, because iroh does not get such a connection back to a direct path; a
+//! fresh connection does. See `RELAY_GRACE` and `STABLE_DIRECT`.
+//! While the path is relayed the peer's routes are parked, so no traffic loads the relay.
+//!
 //! A failure in a connection (handshake, relay insert, receive loop) is logged and counted and the
 //! link keeps going, so one misbehaving peer can't take down the process.
 
@@ -28,6 +33,7 @@ use tracing::{error, info, info_span, warn, Instrument};
 use crate::dns::PeerNames;
 use crate::error::ExtractedErrorCode;
 use crate::path_diagnostics;
+use crate::path_monitor;
 use crate::peer::{self, CommonPeerConfig, ConnectedPeer};
 use crate::proto;
 use crate::relay::Relay;
@@ -37,6 +43,16 @@ use crate::tun;
 /// failed, so that a peer that keeps dropping the connection right away is redialed with a growing
 /// backoff.
 const MIN_USEFUL_CONNECTION: Duration = Duration::from_secs(5);
+
+/// How long a connection may stay relayed, uninterrupted by a direct path, before it is ended and
+/// redialed. Long enough for iroh's own recovery (observed within 20-40 s) and for short network
+/// hiccups, short enough that the relay's latency does not linger.
+const RELAY_GRACE: Duration = Duration::from_secs(30);
+
+/// A connection that was direct for at least this long before it fell back to relay was healthy;
+/// its redial starts with the initial backoff. A shorter one counts as failed, so that a link that
+/// can't hold a direct path is redialed with a growing backoff instead of in a tight cycle.
+const STABLE_DIRECT: Duration = Duration::from_secs(120);
 
 /// Static per-peer configuration for a `PeerSession`.
 #[derive(Clone, Debug)]
@@ -133,13 +149,13 @@ impl SessionHandler {
         cancel: CancellationToken,
     ) -> Outcome {
         info!(peer = %self.config.name, remote_addr, "Connected, starting the communication loop");
-        let diagnostics_cancel = cancel.child_token();
-        let _stop_diagnostics = diagnostics_cancel.clone().drop_guard();
+        let monitors_cancel = cancel.child_token();
+        let _stop_monitors = monitors_cancel.clone().drop_guard();
         path_diagnostics::spawn_change_logger(
             self.config.endpoint.clone(),
             conn.clone(),
             self.config.name.clone(),
-            diagnostics_cancel,
+            monitors_cancel.clone(),
         );
         let peer_config = peer::PeerConfig {
             common: self.config.common.clone(),
@@ -185,11 +201,31 @@ impl SessionHandler {
         }
 
         let established = Instant::now();
+        // While the path is relayed the routes are parked, so that no traffic (e.g. a large
+        // transfer) loads the relay; they are re-armed if the path turns direct again.
+        let peer_handle = connected.clone();
+        let relayed = path_monitor::watch_relayed(
+            path_monitor::spawn(&conn, monitors_cancel),
+            RELAY_GRACE,
+            || {
+                warn!(peer = %self.config.name, "Path turned relayed, pausing traffic");
+                self.relay.park(&self.routes);
+            },
+            || {
+                info!(peer = %self.config.name, "Path is direct again, resuming traffic");
+                self.relay.unpark(&self.routes, peer_handle.clone());
+            },
+        );
+        let mut fell_back_to_relay = false;
         // A cancellation (the peer closed the connection, it was replaced, or shutdown) ends the
         // loop like a dropped connection does; the connection's age then decides the outcome.
         let received = tokio::select! {
             result = connected.recv_loop(self.tx_packet.clone()) => result,
             _ = cancel.cancelled() => Ok(()),
+            _ = relayed => {
+                fell_back_to_relay = true;
+                Ok(())
+            }
         };
         if let Err(err) = received {
             self.count_error(
@@ -200,7 +236,23 @@ impl SessionHandler {
             warn!(peer = %self.config.name, error = ?err, "Receive loop ended with an error");
             self.log_path_snapshot(&conn, "receive loop failed").await;
         }
-        if established.elapsed() < MIN_USEFUL_CONNECTION {
+        let age = established.elapsed();
+        if fell_back_to_relay {
+            counter!(
+                description: "Connections ended because their path stayed relayed",
+                "p2p_vpn_peer_relay_fallbacks",
+                "peer" => self.config.name.clone()
+            )
+            .increment(1);
+            warn!(peer = %self.config.name, ?age, "Connection stayed relayed, ending it to redial");
+            self.log_path_snapshot(&conn, "relayed too long").await;
+            return if age >= RELAY_GRACE + STABLE_DIRECT {
+                Outcome::Done
+            } else {
+                Outcome::Failed
+            };
+        }
+        if age < MIN_USEFUL_CONNECTION {
             Outcome::Failed
         } else {
             Outcome::Done
