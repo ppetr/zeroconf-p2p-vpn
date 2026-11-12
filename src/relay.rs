@@ -135,6 +135,16 @@ impl<T: Clone + Debug + Send + Sync + 'static, R: RoutingTable> Relay<T, R> {
         }
     }
 
+    /// Makes the parked peers bound to `dest_ips` live again with `value`, without touching their
+    /// routes. IPs with no entry are ignored (use [`Self::insert`] to add new ones).
+    pub fn unpark(&self, dest_ips: &[IpAddr], value: T) {
+        for ip in dest_ips {
+            if let Some(mut entry) = self.peer_map.get_mut(ip) {
+                entry.value = Some(value.clone());
+            }
+        }
+    }
+
     pub async fn remove(&self, dest_ips: &[IpAddr]) {
         let _span = tracing::info_span!("p2p_vpn_relay_remove");
         self.remove_locked(&self.handle.lock().await, dest_ips).await
@@ -448,6 +458,24 @@ mod tests {
 
         mock_handle.set_fail(false);
         relay.remove(&[ip]).await;
+    }
+
+    #[tokio::test]
+    async fn unpark_rearms_only_existing_entries() {
+        let mock_handle = MockRouteHandle::new();
+        let relay = Relay::new(mock_handle.clone());
+
+        let (known, unknown) = (ip4(10, 9, 0, 3), ip4(10, 9, 0, 4));
+        relay.insert(&[known], "old".to_string()).await.unwrap();
+        relay.park(&[known]);
+
+        relay.unpark(&[known, unknown], "new".to_string());
+
+        assert_eq!(relay.get(&known), connected("new".to_string()));
+        assert_eq!(relay.get(&unknown), None);
+        assert!(!mock_handle.has_route(&unknown));
+
+        relay.remove(&[known]).await;
     }
 
     #[tokio::test]
