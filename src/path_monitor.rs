@@ -56,6 +56,34 @@ async fn run(mut paths: PathWatcher, tx: watch::Sender<SelectedPath>, cancel: Ca
     }
 }
 
+/// Calls `on_relayed` whenever the selected path turns relayed and `on_direct` when it is direct
+/// again, and resolves once the path has been relayed for `grace` without a direct one in between.
+/// A moment without any selected path changes nothing.
+///
+/// Never resolves if the tracking task ends first.
+pub async fn watch_relayed(
+    mut selected: watch::Receiver<SelectedPath>,
+    grace: Duration,
+    mut on_relayed: impl FnMut(),
+    mut on_direct: impl FnMut(),
+) {
+    // The `Ref` guards `wait_for` returns are dropped right away: they are not `Send`.
+    loop {
+        if selected.wait_for(|kind| *kind == Some(PathKind::Relay)).await.is_err() {
+            break;
+        }
+        on_relayed();
+        let direct_again =
+            async { selected.wait_for(|kind| *kind == Some(PathKind::Direct)).await.is_err() };
+        tokio::select! {
+            _ = tokio::time::sleep(grace) => return,
+            ended = direct_again => if ended { break },
+        }
+        on_direct();
+    }
+    std::future::pending::<()>().await;
+}
+
 fn selected_kind(paths: &PathInfoList) -> SelectedPath {
     paths.iter().find(|path| path.is_selected()).map(|path| {
         if path.is_relay() {
@@ -102,6 +130,7 @@ impl ChangeTracker {
 mod tests {
     use super::*;
     use crate::peer::test_util::connect_pair;
+    use std::sync::{Arc, Mutex};
     use tokio::time::timeout;
 
     const WAIT: Duration = Duration::from_secs(5);
@@ -132,6 +161,86 @@ mod tests {
                 after: Duration::from_secs(60)
             })
         );
+    }
+
+    const GRACE: Duration = Duration::from_secs(30);
+
+    type Events = Arc<Mutex<Vec<&'static str>>>;
+
+    async fn advance(secs: u64) {
+        tokio::time::sleep(Duration::from_secs(secs)).await;
+    }
+
+    fn spawn_watch(
+        selected: SelectedPath,
+    ) -> (watch::Sender<SelectedPath>, Events, tokio::task::JoinHandle<()>) {
+        let (tx, rx) = watch::channel(selected);
+        let events = Events::default();
+        let (on_relayed, on_direct) = (events.clone(), events.clone());
+        let task = tokio::spawn(watch_relayed(
+            rx,
+            GRACE,
+            move || on_relayed.lock().unwrap().push("relayed"),
+            move || on_direct.lock().unwrap().push("direct"),
+        ));
+        (tx, events, task)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn watch_relayed_fires_after_the_grace_of_continuous_relay() {
+        let (tx, events, task) = spawn_watch(Some(PathKind::Direct));
+        advance(5).await;
+        assert!(events.lock().unwrap().is_empty());
+        tx.send_replace(Some(PathKind::Relay));
+        advance(29).await;
+        assert!(!task.is_finished());
+        advance(2).await;
+        assert!(task.is_finished());
+        assert_eq!(*events.lock().unwrap(), ["relayed"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn watch_relayed_restarts_the_countdown_when_direct_returns() {
+        let (tx, events, task) = spawn_watch(Some(PathKind::Relay));
+        advance(20).await;
+        tx.send_replace(Some(PathKind::Direct));
+        advance(5).await;
+        tx.send_replace(Some(PathKind::Relay));
+        advance(29).await;
+        assert!(!task.is_finished());
+        advance(2).await;
+        assert!(task.is_finished());
+        assert_eq!(*events.lock().unwrap(), ["relayed", "direct", "relayed"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn watch_relayed_does_not_fire_while_direct() {
+        let (_tx, events, task) = spawn_watch(Some(PathKind::Direct));
+        advance(300).await;
+        assert!(!task.is_finished());
+        assert!(events.lock().unwrap().is_empty());
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn watch_relayed_counts_through_gaps_without_a_selected_path() {
+        let (tx, events, task) = spawn_watch(Some(PathKind::Relay));
+        advance(10).await;
+        tx.send_replace(None);
+        advance(10).await;
+        tx.send_replace(Some(PathKind::Relay));
+        advance(11).await;
+        assert!(task.is_finished());
+        assert_eq!(*events.lock().unwrap(), ["relayed"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn watch_relayed_never_fires_after_the_sender_is_gone() {
+        let (tx, _events, task) = spawn_watch(Some(PathKind::Relay));
+        drop(tx);
+        advance(120).await;
+        assert!(!task.is_finished());
+        task.abort();
     }
 
     #[tokio::test]
