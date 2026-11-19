@@ -155,6 +155,8 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let dns_names =
         config.dns.as_ref().map(|dns_cfg| Arc::new(dns::PeerNames::new(dns_cfg.suffix.clone())));
+    #[cfg(target_os = "windows")]
+    let mut nrpt_rule: Option<dns_host_config::windows::Nrpt> = None;
     let dns_dispatch = match (&config.dns, &dns_names) {
         (Some(dns_cfg), Some(names)) => {
             // A dedicated address for our own local resolver, derived from (and guaranteed
@@ -171,12 +173,13 @@ async fn main() -> Result<(), anyhow::Error> {
                 "DNS resolution of peer names enabled"
             );
 
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            let route_config = DnsRouteConfig::new(
+                vec![IpAddr::V6(dns_server_addr)],
+                vec![dns_cfg.suffix.clone()],
+            )?;
             #[cfg(target_os = "linux")]
             {
-                let route_config = DnsRouteConfig::new(
-                    vec![IpAddr::V6(dns_server_addr)],
-                    vec![dns_cfg.suffix.clone()],
-                )?;
                 let mut host_dns =
                     dns_host_config::linux::LinuxDnsRoute::probe(env!("CARGO_PKG_NAME")).await;
                 host_dns
@@ -184,9 +187,22 @@ async fn main() -> Result<(), anyhow::Error> {
                     .await
                     .context("Failed to configure the host's DNS resolver for peer names")?;
             }
+            // An NRPT rule lives in the registry, not on the TUN interface, so (unlike on Linux)
+            // it outlives the process: kept in `nrpt_rule` to be withdrawn on shutdown.
+            #[cfg(target_os = "windows")]
+            {
+                let mut host_dns = dns_host_config::windows::Nrpt::probe(env!("CARGO_PKG_NAME"))
+                    .context("Failed to prepare the Windows NRPT (needs an elevated process)")?;
+                if let Err(err) = host_dns.set(&tun.if_name, &route_config).await {
+                    let _ = host_dns.reset().await;
+                    return Err(anyhow::Error::new(err)
+                        .context("Failed to configure the host's DNS resolver for peer names"));
+                }
+                nrpt_rule = Some(host_dns);
+            }
             // `[dns]` isn't best-effort: if it's configured, peer-name resolution must actually
             // work, not silently fall back to "the user has to set it up by hand".
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(not(any(target_os = "linux", target_os = "windows")))]
             anyhow::bail!(
                 "'[dns]' is configured, but there is no automatic host DNS integration for \
                  this platform yet; remove the '[dns]' section, or point the system resolver \
@@ -332,6 +348,12 @@ async fn main() -> Result<(), anyhow::Error> {
     // Removes what the sessions did not. `ScopedRoute`s must be removed explicitly; dropping them
     // panics.
     relay.clear().await;
+    #[cfg(target_os = "windows")]
+    if let Some(mut rule) = nrpt_rule {
+        if let Err(err) = rule.reset().await {
+            tracing::warn!(%err, "Failed to withdraw the NRPT rule");
+        }
+    }
     // Closes the endpoint and tells all peers (CONNECTION_CLOSE) so they free their connection
     // slots immediately instead of waiting for the idle timeout.
     if tokio::time::timeout(ENDPOINT_CLOSE_TIMEOUT, node.close()).await.is_err() {
@@ -346,7 +368,7 @@ const SESSIONS_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 /// Upper bound for waiting on peers to acknowledge the closing of the endpoint.
 const ENDPOINT_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Completes on the first termination request: Ctrl-C, or SIGTERM on Unix.
+/// Completes on the first termination request: Ctrl-C, SIGTERM on Unix, console close/logoff/shutdown on Windows.
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
@@ -362,6 +384,23 @@ async fn shutdown_signal() {
             }
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use tokio::signal::windows::{ctrl_break, ctrl_close, ctrl_logoff, ctrl_shutdown};
+        match (ctrl_break(), ctrl_close(), ctrl_logoff(), ctrl_shutdown()) {
+            (Ok(mut brk), Ok(mut close), Ok(mut logoff), Ok(mut shutdown)) => tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = brk.recv() => {}
+                _ = close.recv() => {}
+                _ = logoff.recv() => {}
+                _ = shutdown.recv() => {}
+            },
+            _ => {
+                tracing::warn!("Cannot install the console event handlers");
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     let _ = tokio::signal::ctrl_c().await;
 }
