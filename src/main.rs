@@ -65,6 +65,8 @@ fn main() -> Result<(), anyhow::Error> {
         }
         [_argv0, "show", config_path] => return show::run(config_path),
         [_argv0, "generate", config_path] => return generate::run(config_path),
+        #[cfg(windows)]
+        [_argv0, "service", args @ ..] => return osal::service_manager::windows::command(args),
         [_argv0, config_path] => *config_path,
         _ => {
             let prog = argv.first().copied().unwrap_or("zeroconf-p2p-vpn");
@@ -76,7 +78,11 @@ fn main() -> Result<(), anyhow::Error> {
         }
     };
 
-    init_logging(std::io::stderr);
+    // Respect the https://no-color.org/ convention: tracing_subscriber only disables ANSI
+    // output when it doesn't detect a terminal, which doesn't help on a Windows console that
+    // doesn't support VT100 escape sequences.
+    let ansi = env::var_os("NO_COLOR").is_none();
+    init_logging(std::io::stderr, ansi);
     tokio::runtime::Runtime::new()?.block_on(async {
         let shutdown = CancellationToken::new();
         tokio::spawn({
@@ -91,8 +97,8 @@ fn main() -> Result<(), anyhow::Error> {
     })
 }
 
-/// Installs the global `tracing` subscriber writing to `writer`.
-fn init_logging<W>(writer: W)
+/// Installs the global `tracing` subscriber writing to `writer`, with ANSI colors if `ansi`.
+fn init_logging<W>(writer: W, ansi: bool)
 where
     W: for<'a> tracing_subscriber::fmt::MakeWriter<'a> + Send + Sync + 'static,
 {
@@ -103,10 +109,6 @@ where
         // `with_span_events` below) on every periodic probe round.
         tracing_subscriber::EnvFilter::new("info,iroh=warn,iroh::net_report=error,portmapper=warn")
     });
-    // Respect the https://no-color.org/ convention: tracing_subscriber only disables ANSI
-    // output when it doesn't detect a terminal, which doesn't help on a Windows console that
-    // doesn't support VT100 escape sequences.
-    let ansi = env::var_os("NO_COLOR").is_none();
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(writer)

@@ -3,6 +3,9 @@
 //! Both functions are no-ops when the daemon was not started by a service manager (e.g. run from a
 //! terminal) and on platforms without a supported one.
 
+#[cfg(windows)]
+pub mod windows;
+
 #[cfg(target_os = "linux")]
 mod systemd;
 #[cfg(target_os = "linux")]
