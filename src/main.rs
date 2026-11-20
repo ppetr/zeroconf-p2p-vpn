@@ -13,7 +13,8 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, level_filters::LevelFilter};
-use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 mod addr;
 mod buffer_pool;
@@ -104,21 +105,21 @@ where
 {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         // iroh logs its internal relay/QUIC/portmapper machinery at INFO, which floods the
-        // journal; RUST_LOG still overrides this entirely when set. `iroh::net_report` is
-        // limited to errors because its WARN-level spans each emit a close event (see
-        // `with_span_events` below) on every periodic probe round.
+        // journal; RUST_LOG still overrides this entirely when set.
         tracing_subscriber::EnvFilter::new("info,iroh=warn,iroh::net_report=error,portmapper=warn")
     });
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(writer)
-        .with_ansi(ansi)
-        // Just CLOSE, not ENTER: tracing_subscriber emits an ENTER event every time an
-        // instrumented future is polled, not just once when the span is created, so a
-        // long-lived span (e.g. a peer connection, instrumented for its whole lifetime) would
-        // log once per poll -- in practice, once per packet.
-        .with_span_events(FmtSpan::CLOSE)
+    let Err(filter) = osal::service_manager::init_native_logging(filter) else {
+        log_level();
+        return;
+    };
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer().with_writer(writer).with_ansi(ansi))
         .init();
+    log_level();
+}
+
+fn log_level() {
     info!(
         "Logging level is {:?}; change the RUST_LOG environment variable to set a different level",
         LevelFilter::current()
