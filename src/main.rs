@@ -55,8 +55,7 @@ fn get_metrics_addr() -> anyhow::Result<std::net::SocketAddr> {
     Ok(std::net::SocketAddr::new(std::net::Ipv6Addr::UNSPECIFIED.into(), port))
 }
 
-#[tokio::main]
-async fn main() -> Result<(), anyhow::Error> {
+fn main() -> Result<(), anyhow::Error> {
     let args: Vec<String> = std::env::args().collect();
     let argv: Vec<&str> = args.iter().map(String::as_str).collect();
     let config_path = match argv.as_slice() {
@@ -77,6 +76,26 @@ async fn main() -> Result<(), anyhow::Error> {
         }
     };
 
+    init_logging(std::io::stderr);
+    tokio::runtime::Runtime::new()?.block_on(async {
+        let shutdown = CancellationToken::new();
+        tokio::spawn({
+            let shutdown = shutdown.clone();
+            async move {
+                shutdown_signal().await;
+                osal::service_manager::notify_stopping();
+                shutdown.cancel();
+            }
+        });
+        serve(config_path, shutdown, osal::service_manager::notify_ready).await
+    })
+}
+
+/// Installs the global `tracing` subscriber writing to `writer`.
+fn init_logging<W>(writer: W)
+where
+    W: for<'a> tracing_subscriber::fmt::MakeWriter<'a> + Send + Sync + 'static,
+{
     let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         // iroh logs its internal relay/QUIC/portmapper machinery at INFO, which floods the
         // journal; RUST_LOG still overrides this entirely when set. `iroh::net_report` is
@@ -90,6 +109,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let ansi = env::var_os("NO_COLOR").is_none();
     tracing_subscriber::fmt()
         .with_env_filter(filter)
+        .with_writer(writer)
         .with_ansi(ansi)
         // Just CLOSE, not ENTER: tracing_subscriber emits an ENTER event every time an
         // instrumented future is polled, not just once when the span is created, so a
@@ -101,6 +121,14 @@ async fn main() -> Result<(), anyhow::Error> {
         "Logging level is {:?}; change the RUST_LOG environment variable to set a different level",
         LevelFilter::current()
     );
+}
+
+/// Starts the metrics exporter and runs the daemon (see [`run`]).
+async fn serve(
+    config_path: &str,
+    shutdown: CancellationToken,
+    ready: impl FnOnce(),
+) -> anyhow::Result<()> {
     let metrics_addr = get_metrics_addr()?;
     metrics_exporter_prometheus::PrometheusBuilder::new()
         .with_http_listener(metrics_addr)
@@ -108,17 +136,7 @@ async fn main() -> Result<(), anyhow::Error> {
         .with_context(|| format!("failed to install Prometheus exporter on {metrics_addr}"))?;
     build_info::register_metrics();
     info!("zeroconf-p2p-vpn {} [{}]", build_info::summary(), build_info::GIT_REV);
-
-    let shutdown = CancellationToken::new();
-    tokio::spawn({
-        let shutdown = shutdown.clone();
-        async move {
-            shutdown_signal().await;
-            osal::service_manager::notify_stopping();
-            shutdown.cancel();
-        }
-    });
-    run(config_path, shutdown, osal::service_manager::notify_ready).await
+    run(config_path, shutdown, ready).await
 }
 
 /// Runs the daemon until `shutdown` is cancelled, then withdraws everything it set up.
