@@ -55,20 +55,28 @@
 #
 # --- Enable ---
 #   systemctl enable --now zeroconf-p2p-vpn.service
+#
+# The unit is Type=notify: `systemctl start` returns once the daemon has set up its TUN device,
+# routes and DNS integration (READY=1), and fails if that setup fails (e.g. a missing polkit rule).
+# It does not wait for any peer to connect.
 
 [Unit]
 Description=zeroconf-p2p-vpn - zero-config peer-to-peer VPN daemon
 After=network-online.target
 Wants=network-online.target
 # No start-rate limit (0 disables it): a persistent misconfiguration (e.g. a missing polkit rule
-# for the optional `[dns]` section, which main.rs treats as a fatal startup error) would otherwise
+# for the optional `[dns]` section, which the daemon treats as a fatal startup error) would otherwise
 # exhaust a StartLimitBurst/StartLimitIntervalSec within the exponential backoff below, parking the
 # unit in failed(start-limit-hit) -- requiring a manual `systemctl reset-failed` even after the
 # root cause is fixed. The backoff's own RestartMaxDelaySec already caps how often we retry.
 StartLimitIntervalSec=0
 
 [Service]
-Type=exec
+# The daemon sends READY=1 once its TUN device, routes and DNS integration are set up (not once
+# peers are connected), and STOPPING=1 when it begins shutting down. A startup failure thus fails
+# `systemctl start` instead of leaving the unit "active" first.
+Type=notify
+NotifyAccess=main
 ExecStart=/usr/local/sbin/zeroconf-p2p-vpn /etc/zeroconf-p2p-vpn/config.toml
 
 # journald doesn't render ANSI color escapes well; the binary already respects NO_COLOR (see

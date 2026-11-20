@@ -124,7 +124,9 @@ Running as a systemd service
 See ``systemd/zeroconf-p2p-vpn.service`` for a hardened example unit,
 including step-by-step install instructions in its header comment (static
 service user, capability-only privileges, and the extra polkit rule needed if
-you use the ``[dns]`` section).
+you use the ``[dns]`` section). The unit is ``Type=notify``: ``systemctl start``
+returns once the node is set up (not once a peer is connected) and fails if the
+setup fails.
 
 Trying it out with Docker
 --------------------------
