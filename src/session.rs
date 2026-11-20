@@ -126,11 +126,17 @@ impl ConnectionHandler for SessionHandler {
         let remote_addr = peer::remote_addr(&conn)
             .map(|addr| addr.to_string())
             .unwrap_or_else(|| "unknown".to_string());
-        // Spans a whole connection's lifetime with the same fields, so that the `enter`/`close`
-        // events tracing_subscriber emits for it (see `main.rs`) double as connect/disconnect
-        // log lines for free, without a matching explicit log call at the other end.
+        // The span gives every log line of this connection the same peer fields.
         let span = info_span!("peer_connection", peer = %self.config.name, %remote_addr);
+        let started = Instant::now();
         let outcome = self.run_connection(conn, &remote_addr, cancel).instrument(span).await;
+        info!(
+            peer = %self.config.name,
+            remote_addr,
+            ?outcome,
+            duration_secs = started.elapsed().as_secs(),
+            "Connection ended"
+        );
         // The connection is gone: keep the routes installed but marked offline until the link
         // reconnects.
         self.park_routes();
