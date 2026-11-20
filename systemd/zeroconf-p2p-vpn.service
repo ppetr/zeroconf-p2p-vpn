@@ -82,6 +82,8 @@ ExecStart=/usr/local/sbin/zeroconf-p2p-vpn /etc/zeroconf-p2p-vpn/config.toml
 # journald doesn't render ANSI color escapes well; the binary already respects NO_COLOR (see
 # src/main.rs).
 Environment=NO_COLOR=1
+# Under systemd the daemon writes native journal records, so log fields are filterable, e.g.
+# `journalctl -u zeroconf-p2p-vpn F_PEER=alice` (fields are upper-cased and prefixed with `F_`).
 SyslogIdentifier=zeroconf-p2p-vpn
 
 Restart=on-failure
