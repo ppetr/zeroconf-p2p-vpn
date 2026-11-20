@@ -22,7 +22,7 @@ This is a zero-config, peer-to-peer VPN daemon (see `README.rst` for the design 
 
 Treat `README.rst`'s "Architecture plan" section as an aspirational roadmap, not a spec of the current code — some details there (e.g. raw `rtnetlink`, `quinn` directly, OTLP telemetry) differ from what's actually implemented (`net-route` crate, `iroh`, plain `tracing`/Prometheus).
 
-`main.rs` wires everything together and drives three concurrent async loops via `tokio::join!`:
+`main.rs` parses arguments and sets up logging and metrics, then calls `run(config_path, shutdown, ready)`, which wires everything together until the caller-owned `shutdown` `CancellationToken` is cancelled (by `shutdown_signal()` in the console wrapper), then withdraws routes, DNS and connections. `ready` is called once setup finished (TUN, routes, DNS), before serving; it says nothing about peers being connected. Inside `run`, three concurrent async loops are driven via `tokio::join!`:
 1. **`tun_loop`** (`Tun::control`) — reads/writes raw IP packets from/to the TUN device using a preallocated buffer pool.
 2. **`connect_loop`** — waits for a connection on the `PeerLink`, performs the `Peer::handshake` (exchanging `Advertise` control messages), registers the peer's advertised routes with `Relay::insert`, then runs `ConnectedPeer::recv_loop` to pump inbound QUIC datagrams to the TUN write side.
 3. **`tun_rx_loop`** — for each packet read from TUN, looks up the destination IP in `Relay`, hands it to the matching peer's `send_packet`, and otherwise (or on send failure) synthesizes an ICMP unreachable/too-big reply via `IcmpGateway`.

@@ -109,6 +109,27 @@ async fn main() -> Result<(), anyhow::Error> {
     build_info::register_metrics();
     info!("zeroconf-p2p-vpn {} [{}]", build_info::summary(), build_info::GIT_REV);
 
+    let shutdown = CancellationToken::new();
+    tokio::spawn({
+        let shutdown = shutdown.clone();
+        async move {
+            shutdown_signal().await;
+            shutdown.cancel();
+        }
+    });
+    run(config_path, shutdown, || {}).await
+}
+
+/// Runs the daemon until `shutdown` is cancelled, then withdraws everything it set up.
+///
+/// `ready` is called once the node is set up and about to serve; it is not called if setup fails.
+/// Setup itself is not interruptible, so a `shutdown` cancelled earlier takes effect right after
+/// `ready`.
+async fn run(
+    config_path: &str,
+    shutdown: CancellationToken,
+    ready: impl FnOnce(),
+) -> anyhow::Result<()> {
     info!("Setting up a node");
     let config = config::Config::load(config_path)?;
     let secret_key = load_key_from_disk(&config.private_key_path)?;
@@ -116,6 +137,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     if config.peers.is_empty() {
         info!("No peers configured in '{}', nothing to do", config_path);
+        ready();
         return Ok(());
     }
 
@@ -333,9 +355,10 @@ async fn main() -> Result<(), anyhow::Error> {
     };
 
     let mut sessions_loop = std::pin::pin!(sessions_loop.fuse());
+    ready();
     tokio::select! {
         _ = async { tokio::join!(tun_loop, sessions_loop.as_mut(), tun_rx_loop) } => {}
-        () = shutdown_signal() => info!("Shutdown requested, closing connections"),
+        () = shutdown.cancelled() => info!("Shutdown requested, closing connections"),
     }
     // Cancelling makes the per-peer links close their connections and end; each session then
     // withdraws its routes. Dropping the sessions instead would leave that to `relay.clear()`.
