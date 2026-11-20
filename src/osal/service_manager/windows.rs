@@ -18,6 +18,8 @@ use windows_service::service_control_handler::{
 };
 use windows_service::{define_windows_service, service_dispatcher};
 
+mod install;
+
 /// The one name the daemon's service is registered under.
 pub const SERVICE_NAME: &str = "zeroconf-p2p-vpn";
 
@@ -158,10 +160,15 @@ fn serve_until_stopped(
     }
 }
 
-/// Runs a `service` subcommand: `run <config>` (started by the SCM).
+/// Runs a `service` subcommand.
 pub fn command(args: &[&str]) -> anyhow::Result<()> {
     match args {
         ["run", config_path] => run_dispatcher(config_path),
-        _ => anyhow::bail!("Usage: zeroconf-p2p-vpn service run <config-file-path>"),
+        ["install", rest @ ..] => {
+            let (config, print_only) = install::parse_install_args(rest)?;
+            install::install(&config, print_only)
+        }
+        ["uninstall"] => install::uninstall(),
+        _ => anyhow::bail!("{}", install::INSTALL_USAGE),
     }
 }
