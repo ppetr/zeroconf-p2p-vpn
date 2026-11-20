@@ -153,7 +153,9 @@ async fn run(
 ) -> anyhow::Result<()> {
     info!("Setting up a node");
     let config = config::Config::load(config_path)?;
-    let secret_key = load_key_from_disk(&config.private_key_path)?;
+    let secret_key = load_key_from_disk(&config.private_key_path).with_context(|| {
+        format!("cannot load the private key '{}'", config.private_key_path.display())
+    })?;
     info!("My public key: '{}'", secret_key.public().to_z32());
 
     if config.peers.is_empty() {
