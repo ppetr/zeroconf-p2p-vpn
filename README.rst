@@ -115,8 +115,9 @@ wherever ``alice`` is currently reachable:
    suffix = "p2p"
 
 This is implemented and tested on Linux (``systemd-resolved``, with
-``resolvconf`` and a static ``/etc/resolv.conf`` edit as fallbacks). Windows
-and macOS support is not yet wired up -- see ``DESIGN.rst`` for details.
+``resolvconf`` and a static ``/etc/resolv.conf`` edit as fallbacks) and on
+Windows (a Name Resolution Policy Table rule; needs an elevated process).
+macOS support is not yet wired up -- see ``DESIGN.rst`` for details.
 
 Running as a systemd service
 -----------------------------
@@ -127,6 +128,31 @@ service user, capability-only privileges, and the extra polkit rule needed if
 you use the ``[dns]`` section). The unit is ``Type=notify``: ``systemctl start``
 returns once the node is set up (not once a peer is connected) and fails if the
 setup fails.
+
+Running as a Windows service
+-----------------------------
+
+The daemon needs an elevated process on Windows (to create the Wintun adapter
+and, with ``[dns]``, the NRPT rule) and ``wintun.dll`` next to the executable.
+From an elevated PowerShell:
+
+.. code:: powershell
+
+   > New-Item -ItemType Directory C:\ProgramData\zeroconf-p2p-vpn
+   > .\zeroconf-p2p-vpn.exe generate C:\ProgramData\zeroconf-p2p-vpn\config.toml
+   > # edit config.toml: fill in [peers]
+   > .\zeroconf-p2p-vpn.exe service install --config C:\ProgramData\zeroconf-p2p-vpn\config.toml
+   > Start-Service zeroconf-p2p-vpn
+
+``service install`` registers the single ``zeroconf-p2p-vpn`` service (runs as
+LocalSystem, starts automatically after boot, is restarted after failures) for
+the executable at its current path, and restricts the private key file to
+SYSTEM and Administrators. ``service install --print`` prints the equivalent
+PowerShell commands instead of running them. ``service uninstall`` stops and
+removes the service. Logs go to ``%ProgramData%\zeroconf-p2p-vpn\logs``.
+
+As with the systemd unit, ``Start-Service`` returns once the node is set up,
+not once a peer is connected.
 
 Trying it out with Docker
 --------------------------

@@ -126,8 +126,9 @@ out-of-band addresses, and routing domains needing at least two labels.
 
 **Platform status:** ``dns-host-config``'s Linux chain (``systemd-resolved`` /
 ``resolvconf`` / static ``/etc/resolv.conf``) is implemented and is what this project wires up.
-Windows (NRPT) exists in ``dns-host-config`` but is not yet wired up here or verified against a
-real Windows host; macOS has no backend yet (``/etc/resolver/<suffix>`` is designed but
+Windows (NRPT) is wired up too and was verified on a Windows 11 host: the rule needs an elevated
+process, outlives a killed process (the next start adopts it) and is removed on graceful shutdown;
+macOS has no backend yet (``/etc/resolver/<suffix>`` is designed but
 unimplemented -- see ``dns-announce``'s ``docs/design-dns-host-config.md``). On any platform
 without a wired-up backend, the in-process resolver still answers queries sent to it directly --
 only the automatic host-side configuration is missing, and the system resolver would need to be
