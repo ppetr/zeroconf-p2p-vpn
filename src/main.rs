@@ -114,10 +114,11 @@ async fn main() -> Result<(), anyhow::Error> {
         let shutdown = shutdown.clone();
         async move {
             shutdown_signal().await;
+            osal::service_manager::notify_stopping();
             shutdown.cancel();
         }
     });
-    run(config_path, shutdown, || {}).await
+    run(config_path, shutdown, osal::service_manager::notify_ready).await
 }
 
 /// Runs the daemon until `shutdown` is cancelled, then withdraws everything it set up.

@@ -42,7 +42,7 @@ Key modules:
 - **`buffer_pool.rs`** — fixed-size pool of reusable byte buffers for TUN reads, to avoid per-packet allocation.
 - **`proto.rs`** — the control-plane protocol: `ControlRequest`/`ControlResponse` messages (defined in `proto/p2p_vpn/control/v1/control.proto`, compiled by `build.rs` via `prost-build`) exchanged over a QUIC bidirectional stream, currently used for the `Advertise` handshake.
 - **`error.rs`** — `ExtractedErrorCode` normalizes `std::io::Error` / `anyhow::Error` / `thin_status::ThinStatus` into consistent Prometheus metric label pairs (`ERROR_CODE`/`ERROR_KIND`); also has loop/task shutdown helpers that treat `Cancelled` as a non-error.
-- **`osal/`** — OS abstraction layer; currently just Linux/libc errno classification for retryable TUN I/O errors.
+- **`osal/`** — OS abstraction layer: Linux/libc errno classification for retryable TUN I/O errors, and `service_manager` (`notify_ready` / `notify_stopping`), which reports lifecycle to the service manager that started the daemon (systemd `READY=1` / `STOPPING=1` via `sd-notify` on Linux; no-op elsewhere or when not run by one). Platform-specific code lives in per-platform submodules.
 
 Build info: `build.rs` embeds the git revision and `git describe` output (`-modified` suffix = dirty tree); `build_info.rs` exposes them via the `p2p_vpn_build_info` metric, the startup log line and `--version`. Builds without a usable `.git` (e.g. in Docker) pass `ZEROCONF_GIT_REV` / `ZEROCONF_GIT_DESCRIBE` instead; `docker/cross/build.sh` does this.
 
