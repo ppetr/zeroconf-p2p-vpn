@@ -404,7 +404,7 @@ async fn run(
     // Closes the endpoint and tells all peers (CONNECTION_CLOSE) so they free their connection
     // slots immediately instead of waiting for the idle timeout.
     if tokio::time::timeout(ENDPOINT_CLOSE_TIMEOUT, node.close()).await.is_err() {
-        tracing::warn!("Closing the endpoint timed out");
+        info!("Closing the endpoint timed out, not waiting for the peers any longer");
     }
     Ok(())
 }
@@ -412,8 +412,9 @@ async fn run(
 /// Upper bound for waiting on the peer sessions to withdraw their routes.
 const SESSIONS_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Upper bound for waiting on peers to acknowledge the closing of the endpoint.
-const ENDPOINT_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// Upper bound for closing the endpoint, which waits out the QUIC drain period (3 x PTO) of every
+/// connection; that grows with the round-trip time and with a dead path.
+const ENDPOINT_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Completes on the first termination request: Ctrl-C, SIGTERM on Unix, console close/logoff/shutdown on Windows.
 async fn shutdown_signal() {
