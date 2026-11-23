@@ -66,6 +66,31 @@ services:
       - /zeroconf-p2p-vpn
       - config.toml
 
+  # The real systemd unit under systemd as PID 1; alice's identity, so don't run it together with
+  # node-alice. Used by systemd-test.sh.
+  node-systemd:
+    profiles: [systemd]
+    build:
+      context: ..
+      dockerfile: ./docker/systemd.Dockerfile
+    container_name: node_systemd
+    privileged: true
+    cgroup: host
+    tmpfs:
+      - /run
+      - /run/lock
+      - /tmp
+    networks:
+      vpn_test_net:
+        ipv4_address: 172.25.0.5
+    volumes:
+      - ./data/keys/alice.raw:/etc/zeroconf-p2p-vpn/zeroconf-p2p-vpn_private.key:ro
+      - ./data/systemd-no-credentials.conf:/etc/systemd/system/zeroconf-p2p-vpn.service.d/no-credentials.conf:ro
+      - ./data/systemd-config.toml:/etc/zeroconf-p2p-vpn/config.toml:ro
+      - ../systemd/zeroconf-p2p-vpn.service:/etc/systemd/system/zeroconf-p2p-vpn.service:ro
+      - ../systemd/zeroconf-p2p-vpn.sysusers.conf:/etc/sysusers.d/zeroconf-p2p-vpn.conf:ro
+      - ../target/debug/zeroconf-p2p-vpn:/usr/local/sbin/zeroconf-p2p-vpn:ro
+
 networks:
   vpn_test_net:
     driver: bridge

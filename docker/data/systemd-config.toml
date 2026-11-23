@@ -1,0 +1,12 @@
+# Config of the node running under systemd (alice's identity); the key is read from a plain path (see
+# systemd-no-credentials.conf).
+[host]
+private_key_path = "/etc/zeroconf-p2p-vpn/zeroconf-p2p-vpn_private.key"
+
+[peers]
+bob = "18x6mrteyqw6oqga8418afrnamm3mpwftcojtre5j4crpeqzf66o"
+
+[discovery]
+n0_discovery = "NoN0"
+use_mdns = true
+use_dht = false
