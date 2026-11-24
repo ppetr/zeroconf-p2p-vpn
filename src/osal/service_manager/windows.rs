@@ -146,7 +146,7 @@ fn serve_until_stopped(
                 }
             }
         };
-        crate::serve(config_path, shutdown, ready).await
+        crate::serve(config_path, shutdown, ready, crate::ENDPOINT_CLOSE_TIMEOUT).await
     });
 
     match ready_err_rx.try_recv() {

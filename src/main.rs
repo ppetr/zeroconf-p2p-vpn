@@ -94,7 +94,8 @@ fn main() -> Result<(), anyhow::Error> {
                 shutdown.cancel();
             }
         });
-        serve(config_path, shutdown, osal::service_manager::notify_ready).await
+        serve(config_path, shutdown, osal::service_manager::notify_ready, ENDPOINT_CLOSE_TIMEOUT)
+            .await
     })
 }
 
@@ -131,6 +132,7 @@ async fn serve(
     config_path: &str,
     shutdown: CancellationToken,
     ready: impl FnOnce(),
+    endpoint_close_timeout: std::time::Duration,
 ) -> anyhow::Result<()> {
     let metrics_addr = get_metrics_addr()?;
     metrics_exporter_prometheus::PrometheusBuilder::new()
@@ -139,7 +141,7 @@ async fn serve(
         .with_context(|| format!("failed to install Prometheus exporter on {metrics_addr}"))?;
     build_info::register_metrics();
     info!("zeroconf-p2p-vpn {} [{}]", build_info::summary(), build_info::GIT_REV);
-    run(config_path, shutdown, ready).await
+    run(config_path, shutdown, ready, endpoint_close_timeout).await
 }
 
 /// Runs the daemon until `shutdown` is cancelled, then withdraws everything it set up.
@@ -151,6 +153,7 @@ async fn run(
     config_path: &str,
     shutdown: CancellationToken,
     ready: impl FnOnce(),
+    endpoint_close_timeout: std::time::Duration,
 ) -> anyhow::Result<()> {
     info!("Setting up a node");
     let config = config::Config::load(config_path)?;
@@ -403,7 +406,7 @@ async fn run(
     }
     // Closes the endpoint and tells all peers (CONNECTION_CLOSE) so they free their connection
     // slots immediately instead of waiting for the idle timeout.
-    if tokio::time::timeout(ENDPOINT_CLOSE_TIMEOUT, node.close()).await.is_err() {
+    if tokio::time::timeout(endpoint_close_timeout, node.close()).await.is_err() {
         info!("Closing the endpoint timed out, not waiting for the peers any longer");
     }
     Ok(())
