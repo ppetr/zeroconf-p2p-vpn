@@ -17,7 +17,7 @@ pub use systemd::{init_native_logging, notify_ready, notify_stopping};
 pub fn notify_ready() {}
 
 /// Reports that the daemon began shutting down.
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(unix, not(target_os = "linux")))]
 pub fn notify_stopping() {}
 
 /// Installs service-manager-native logging; there is none here, so `filter` is handed back.

@@ -5580,6 +5580,7 @@ dependencies = [
  "tracing-subscriber",
  "tun-rs",
  "windows-service",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

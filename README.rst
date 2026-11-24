@@ -151,6 +151,11 @@ SYSTEM and Administrators. ``service install --print`` prints the equivalent
 PowerShell commands instead of running them. ``service uninstall`` stops and
 removes the service. Logs go to ``%ProgramData%\zeroconf-p2p-vpn\logs``.
 
+When run from a console instead, Ctrl-C, Ctrl-Break and closing the console
+window shut the node down cleanly, but logging off or shutting down Windows does
+not: the process is ended without withdrawing its routes and DNS rule. Run it as
+a service if that matters.
+
 As with the systemd unit, ``Start-Service`` returns once the node is set up,
 not once a peer is connected.
 

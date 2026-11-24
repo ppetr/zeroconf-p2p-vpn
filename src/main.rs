@@ -86,16 +86,15 @@ fn main() -> Result<(), anyhow::Error> {
     init_logging(std::io::stderr, ansi);
     tokio::runtime::Runtime::new()?.block_on(async {
         let shutdown = CancellationToken::new();
-        tokio::spawn({
-            let shutdown = shutdown.clone();
-            async move {
-                shutdown_signal().await;
-                osal::service_manager::notify_stopping();
-                shutdown.cancel();
-            }
-        });
-        serve(config_path, shutdown, osal::service_manager::notify_ready, ENDPOINT_CLOSE_TIMEOUT)
-            .await
+        let _termination = osal::termination::install(shutdown.clone())
+            .context("cannot install the termination handlers")?;
+        serve(
+            config_path,
+            shutdown,
+            osal::service_manager::notify_ready,
+            CONSOLE_ENDPOINT_CLOSE_TIMEOUT,
+        )
+        .await
     })
 }
 
@@ -419,39 +418,7 @@ const SESSIONS_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 /// connection; that grows with the round-trip time and with a dead path.
 const ENDPOINT_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Completes on the first termination request: Ctrl-C, SIGTERM on Unix, console close/logoff/shutdown on Windows.
-async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{signal, SignalKind};
-        match signal(SignalKind::terminate()) {
-            Ok(mut sigterm) => tokio::select! {
-                _ = tokio::signal::ctrl_c() => {}
-                _ = sigterm.recv() => {}
-            },
-            Err(err) => {
-                tracing::warn!(%err, "Cannot install the SIGTERM handler");
-                let _ = tokio::signal::ctrl_c().await;
-            }
-        }
-    }
-    #[cfg(windows)]
-    {
-        use tokio::signal::windows::{ctrl_break, ctrl_close, ctrl_logoff, ctrl_shutdown};
-        match (ctrl_break(), ctrl_close(), ctrl_logoff(), ctrl_shutdown()) {
-            (Ok(mut brk), Ok(mut close), Ok(mut logoff), Ok(mut shutdown)) => tokio::select! {
-                _ = tokio::signal::ctrl_c() => {}
-                _ = brk.recv() => {}
-                _ = close.recv() => {}
-                _ = logoff.recv() => {}
-                _ = shutdown.recv() => {}
-            },
-            _ => {
-                tracing::warn!("Cannot install the console event handlers");
-                let _ = tokio::signal::ctrl_c().await;
-            }
-        }
-    }
-    #[cfg(not(any(unix, windows)))]
-    let _ = tokio::signal::ctrl_c().await;
-}
+/// [`ENDPOINT_CLOSE_TIMEOUT`] when run from a console. Windows kills a console process about 5 s
+/// after a console close event, so the whole cleanup has to fit into that.
+const CONSOLE_ENDPOINT_CLOSE_TIMEOUT: std::time::Duration =
+    if cfg!(windows) { std::time::Duration::from_secs(2) } else { ENDPOINT_CLOSE_TIMEOUT };
