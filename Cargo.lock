@@ -921,9 +921,9 @@ dependencies = [
 
 [[package]]
 name = "dns-host-config"
-version = "0.1.3"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4c37b802fef92193582ebabbeb02604951dda9627dc1b6f585090fe70315e6f"
+checksum = "7e8ca1b794bbc714994f66ec4c7b7f01fd0f4624047f06df8ea71c1203f51d20"
 dependencies = [
  "async-trait",
  "libc",

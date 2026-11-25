@@ -229,7 +229,9 @@ async fn run(
             #[cfg(target_os = "linux")]
             {
                 let mut host_dns =
-                    dns_host_config::linux::LinuxDnsRoute::probe(env!("CARGO_PKG_NAME")).await;
+                    dns_host_config::linux::LinuxDnsRoute::probe(env!("CARGO_PKG_NAME"))
+                        .await
+                        .context("Cannot configure the host's DNS resolver for peer names")?;
                 host_dns
                     .set(&tun.if_name, &route_config)
                     .await
