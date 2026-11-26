@@ -11,6 +11,7 @@ services:
       - /dev/net/tun:/dev/net/tun      # Přístup k TUN zařízení
     environment:
       RUST_LOG: info,iroh=warn
+      DNS_HOST_CONFIG_BACKEND: static-resolv-conf
     networks:
       vpn_test_net:
         ipv4_address: 172.25.0.2
@@ -33,6 +34,7 @@ services:
       - /dev/net/tun:/dev/net/tun
     environment:
       RUST_LOG: info,iroh=warn
+      DNS_HOST_CONFIG_BACKEND: static-resolv-conf
     networks:
       vpn_test_net:
         ipv4_address: 172.25.0.3
@@ -55,6 +57,7 @@ services:
       - /dev/net/tun:/dev/net/tun
     environment:
       RUST_LOG: info,iroh=warn
+      DNS_HOST_CONFIG_BACKEND: static-resolv-conf
     networks:
       vpn_test_net:
         ipv4_address: 172.25.0.4

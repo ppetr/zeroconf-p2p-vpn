@@ -114,8 +114,10 @@ wherever ``alice`` is currently reachable:
    [dns]
    suffix = "p2p"
 
-This is implemented and tested on Linux (``systemd-resolved``, with
-``resolvconf`` and a static ``/etc/resolv.conf`` edit as fallbacks) and on
+This is implemented and tested on Linux (``systemd-resolved`` only; startup
+fails with fix instructions if it is missing, and the flat ``resolvconf`` /
+static ``/etc/resolv.conf`` backends are opt-in via
+``DNS_HOST_CONFIG_BACKEND``, as they only work with glibc) and on
 Windows (a Name Resolution Policy Table rule; needs an elevated process).
 macOS support is not yet wired up -- see ``DESIGN.rst`` for details.
 

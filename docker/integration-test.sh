@@ -106,8 +106,9 @@ send_data() {
 }
 
 @test "Peer names resolve via DNS, and other lookups still fall through" {
-    # None of these containers run systemd/D-Bus or have `resolvconf` installed, so this
-    # exercises dns-host-config's last-resort backend: a direct, static /etc/resolv.conf edit.
+    # None of these containers run systemd/D-Bus, so docker-compose.yml opts in to dns-host-config's
+    # flat backend via DNS_HOST_CONFIG_BACKEND: a direct, static /etc/resolv.conf edit (fine
+    # here, as the checks use glibc's `getent`, which falls through on REFUSED).
     run wait_dns node-alice bob.p2p "$BOB_VPN"
     [ "$status" -eq 0 ]
     run wait_dns node-alice charlie.p2p "$CHARLIE_VPN"
